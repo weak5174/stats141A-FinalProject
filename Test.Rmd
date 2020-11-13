@@ -1,7 +1,7 @@
 ---
 title: "Test"
-author: "Christina De Cesaris"
-date: "11/10/2020"
+author: "Christina De Cesaris, ATW"
+date: "11/10/2020, 11/13/2020"
 output: html_document
 ---
 
@@ -17,9 +17,22 @@ data = read.csv("data/IMPROVE_2015_data_organized.csv")
 dim(meta_data)
 
 dim(data)
-data
-meta_data
+#data
+#meta_data
 
 meta_data %>% group_by(State)
 summary(meta_data)
 ```
+
+```{r, "ATW GitHub test Section",warning=FALSE,message=FALSE}
+
+qplot(PM2.5, data = data, main="Boxplot of PM2.5")+ 
+  theme(plot.title = element_text(hjust = 0.5))+
+  geom_text(x = 50, y = 5000, label = "Notice lognormality of concentrations \n Typical of pollution samples. \n ") 
+
+qplot(PM2.5, data = data, main="Logified Boxplot of PM2.5")+ 
+  theme(plot.title = element_text(hjust = 0.5))+
+  geom_text(color="blue",x = 0.000001, y = 2000, label = "Pollution samples actually follow a 2 or 3 param logN dist \n Big point: outlier ID difficult on original variable scale \n Regression using unscaled variables probably OK")+scale_x_log10()
+
+```
+
