@@ -12,7 +12,7 @@ library(tidyverse)
 
 meta_data =read.csv("data/IMPROVE_metadata.csv")
 
-data = read.csv("data/IMPROVE_2015_data_organized.csv")
+data = read.csv("data/IMPROVE_2015_data_w_UNC_v2.csv")
 
 dim(meta_data)
 
