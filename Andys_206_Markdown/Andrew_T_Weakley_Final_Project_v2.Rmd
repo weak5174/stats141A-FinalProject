@@ -1,0 +1,706 @@
+---
+title: "Appendix 2 STA206 Final Project"
+author: "Andrew T. Weakley"
+date: "11/23/2020"
+output:
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(broom)
+library(gridExtra)
+library(MASS)
+library(Hmisc)
+library(corrplot)
+library(eivtools)
+library(ggbiplot)
+library(boot)
+```
+
+## --- Step 1: Load and process the data ----
+
+```{r, "Part A-C: Load and process data I"}
+## --- Part a: Upload Metadata for samples ---
+META_DATA<-as_tibble(read.csv("IMPROVE_metadata.csv"))
+## --- Filter samples based on living in SW ---
+# --- Consider only AZ and NM for simplicity
+# (Definition of American  "Southwest" varies by source. However, AZ and NM are always included.
+SW_META<-as_tibble(META_DATA %>% filter(State =="AZ" | State =="NM"))
+SW_META
+
+## --- Part b: Load samples data ---
+DATA<-as_tibble(read.csv("IMPROVE_2015_data_w_UNC.csv"))
+
+## --- Part c: Select samples from SW given site identifiers from SW_META table ("Code")
+SW_DATA_all<-as_tibble(DATA %>% filter(SiteCode %in% SW_META$Code))
+```
+
+```{r,"Part D: Check for gross absorbance violations"}
+# Let's identify any samples that (grossly) violate absorbance laws.
+# fabs (=Y) cannot be negative. Remove samples that are < -3*UNC at zero absorbance... This is conservative as errors may make some absorbance <0 for small concentrations.
+SW_DATA_all<-SW_DATA_all %>% dplyr::filter(fAbs > -3*fAbs_UNC)
+```
+
+```{r, "Screen proxies, constructs, PM, and useless things"}
+exclude<-c("PM2.5","PM10","POC","ammNO3","ammSO4","SeaSalt","OC1","OC2","OC3","OC4","EC1","EC2","EC3","fAbs_MDL")
+SW_DATA_LRG<- SW_DATA_all %>% dplyr::select(!contains(exclude) & !matches("_UNC") | matches("fAbs_UNC"))
+any(is.na(SW_DATA_LRG))
+SW_DATA_LRG<-SW_DATA_LRG[which(complete.cases(SW_DATA_LRG)),]
+any(is.na(SW_DATA_LRG))
+```
+
+```{r, "Part E: Select covariates from theory for first order model"}
+X1<-c("SiteCode","Date","fAbs","EC","OC","SOIL","FE","AL","SI","CA","TI","OP","fAbs_UNC")
+SW_DATA<-SW_DATA_LRG %>% dplyr::select(all_of(X1))
+
+```
+
+```{r, "Part F: Partition data into training and testing sets"}
+## --- Instead of random partitioning, I will partition by first sorting samples by SiteCode and DATE (already done) and place every other sample in the test set.
+# --- This data has seasonality. Sorting by date therefore ensures seasonality is equivalent between datasets
+n<-nrow(SW_DATA)
+ind_test<-seq(1,n,2)
+SW_DATA_test<-SW_DATA[ind_test,]
+SW_DATA<-SW_DATA[-ind_test,]
+```
+
+## --- Step 2: Check correlations, descriptives ---
+
+```{r, "Part A: Histograms", warning=FALSE,message=FALSE,fig.cap="Figure (1) & A2.1: Histograms of theoretical best features" }
+H6<-qplot(fAbs, data = SW_DATA, main="Filter Absorption (fAbs)")+
+  theme(plot.title = element_text(size=9,hjust = 0.5))+
+  scale_x_log10(limits=c(0.001,100))
+H7<-qplot(EC, data = SW_DATA, main="Elemental Carbon (EC)")+ theme(plot.title = element_text(size=9, hjust = 0.5))+
+  scale_x_log10(limits=c(0.001,100))
+H8<-qplot(OC, data = SW_DATA, main="Organic Carbon (OC)")+
+  theme(plot.title = element_text(size=9, hjust = 0.5))+
+  scale_x_log10(limits=c(0.001,100))
+H9<-qplot(SOIL, data = SW_DATA, main="SOIL")+
+  theme(plot.title = element_text(size=9, hjust = 0.5))+
+  scale_x_log10(limits=c(0.001,100))
+H10<-qplot(FE, data = SW_DATA, main="Iron (FE)")+
+  theme(plot.title = element_text(size=9, hjust = 0.5))+
+  scale_x_log10(limits=c(0.001,100))
+grid.arrange(H6,H7,H8,H9,H10,nrow=2,ncol=3)
+```
+
+```{r, "Part B: Boxpots by site", warning=FALSE,message=FALSE,fig.cap="Figure (2.1) A2.2a: Aide-by-side Boxplots for fAbs and EC"}
+# --- Plot of abs and EC ---
+H1<-ggplot(SW_DATA,aes(x=SiteCode,y=fAbs,color=SiteCode))+
+  geom_boxplot()+
+  theme(plot.title=element_text(hjust = 0.5))+
+  scale_y_log10(limits=c(0.001,100))+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+H2<-ggplot(SW_DATA,aes(x=SiteCode,y=EC,color=SiteCode))+
+  geom_boxplot()+
+  theme(plot.title=element_text(hjust = 0.5))+
+  scale_y_log10(limits=c(0.001,100))+ 
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+# --- Plot of OC and SOIL ---
+H3<-ggplot(SW_DATA,aes(x=SiteCode,y=OC,color=SiteCode))+
+  geom_boxplot()+
+  theme(plot.title=element_text(hjust = 0.5))+
+  scale_y_log10(limits=c(0.001,100))+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=5))
+H4<-ggplot(SW_DATA,aes(x=SiteCode,y=SOIL,color=SiteCode))+
+  geom_boxplot()+
+  theme(plot.title=element_text(hjust = 0.5))+
+  scale_y_log10(limits=c(0.001,100))+ 
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=5))
+
+grid.arrange(H1,H2,nrow=1)
+```
+```{r,warning=FALSE,message=FALSE,fig.cap="Figure (2.2) & A2.2b: Aide-by-side Boxplots for OC, SOIL,EC"}
+# --- Iron plot ---
+H5<-ggplot(SW_DATA,aes(x=SiteCode,y=FE,color=SiteCode))+
+  geom_boxplot()+
+  theme(plot.title=element_text(hjust = 0.5))+
+  scale_y_log10(limits=c(0.001,100))+ 
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size=5))
+
+grid.arrange(H3,H4,H5,nrow=1)
+
+```
+
+```{r, "Part C: Correlations and scatter plots", fig.cap="Figure A2.3: COrrelation plot", warning=FALSE,message=FALSE}
+R_FO<-cor(SW_DATA %>% dplyr::select(!all_of(c("SiteCode","Date","fAbs_UNC"))))
+corrplot(R_FO, method="number",number.cex=0.75)
+describe(SW_DATA$fAbs)
+```
+```{r,fig.cap="Figure (3) & A4: Scatter plots of fAbs against theoretical variables", warning=FALSE,message=FALSE}
+# --- Scatter plots of fAbs vs. Predictors (fancy)---
+P1<-qplot(EC,fAbs, data = SW_DATA, main="Absorbance (fAbs) versus EC")+
+  theme(plot.title = element_text(size=9,hjust = 0.5))+geom_smooth(se=FALSE)
+P2<-qplot(OC,fAbs, data = SW_DATA, main="Absorbance (fAbs) versus OC")+
+  theme(plot.title = element_text(size=9, hjust = 0.5))+geom_smooth(se=FALSE,method="lm")
+P3<-qplot(SOIL,fAbs, data = SW_DATA, main="Absorbance (fAbs) versus SOIL")+
+  theme(plot.title = element_text(size=9, hjust = 0.5))+geom_smooth(se=FALSE,method="lm")
+P4<-qplot(FE,fAbs, data = SW_DATA, main="Absorbance (fAbs) versus Iron (FE)")+
+  theme(plot.title = element_text(size=9, hjust = 0.5))+geom_smooth(se=FALSE,method="lm")
+grid.arrange(P1,P2,P3,P4,nrow=2,ncol=2)
+
+```
+##### --- Comment on scatter plots ---
+
+1) Appears to be two domains for FE (and SOIL) in their relation ship to fAbs
+2) More importantly, linear absorbance laws appear to breakdown for EC --- the main theoretical contributor to absorbance --- at high concentration. This is a well known phenomenon and will likely require the inclusion of a polynomial approximation. Of course, the model becomes acausal (non-physical) at that point. But that's OK, we are interested in prediction for this study.
+
+```{r, include=FALSE,eval=FALSE}
+# --- Scatter plots of fAbs vs. log(Predictors) (fancy)---
+P1<-qplot(log(EC+1),fAbs, data = SW_DATA, main="Absorbance (fAbs) versus log(EC)")+
+  theme(plot.title = element_text(size=9,hjust = 0.5))+geom_smooth(se=FALSE)+geom_smooth(se=FALSE,method="lm",color="red")
+P2<-qplot(log(OC+1),fAbs, data = SW_DATA, main="Absorbance (fAbs) versus OC")+
+  theme(plot.title = element_text(size=9, hjust = 0.5))+geom_smooth(se=FALSE,method="lm")
+P3<-qplot(log(SOIL+1),fAbs, data = SW_DATA, main="Absorbance (fAbs) versus SOIL")+
+  theme(plot.title = element_text(size=9, hjust = 0.5))+geom_smooth(se=FALSE,method="lm")
+P4<-qplot(log(FE+0.01),fAbs, data = SW_DATA, main="Absorbance (fAbs) versus Iron (FE)")+
+  theme(plot.title = element_text(size=9, hjust = 0.5))+geom_smooth(se=FALSE,method="lm")
+grid.arrange(P1,P2,P3,P4,nrow=2,ncol=2)
+```
+
+## --- Step 3: First order (additive) regression models ----
+
+```{r, "Part 3.1: Model 1",fig.cap="Figure A2.5: Diagnostics for 'Theretical I' model"}
+## --- Concerned mostly with determining effect for FE beyond SOIL, if any ---
+## --- fAbs against EC,OC,SOIL,FE ---
+fit_FO<-lm(fAbs~EC+OC+SOIL+FE-1,SW_DATA,weights=1/SW_DATA$fAbs_UNC^2)
+par(mfrow=c(2,2))
+plot(fit_FO)
+summary(fit_FO)
+glance(fit_FO)
+```
+
+```{r, "Part 3.1: Model 1 ANOVA and diagnostics",fig.cap="Figure A2.6: Cook's distance and standardized residuals plots (zoomed in)"}
+anova(fit_FO)
+## --- Let's just look at residuals ---
+# --- Let's look at cook'sd distance...
+par(mfrow=c(1,2))
+plot(fit_FO, which=4)
+plot(fit_FO, which=5)
+glance(fit_FO)
+```
+
+### --- COmments on model 1 ---
+
+1) A reasonable model overall; the residuals could use some work, i.e., perhaps we are missing some pertinent information with only these variables.
+2) ONe possible explanation for the odd behavior of the standardized residuals might be related to the variable "OP"-- which was not included in this model. OC and EC are actually defined operationally by a thermal analysis method that attempts to apportion the mass of carbon in each sample collected into either OC or EC. TO make a long story short, OP is a correction factor that's neecesary to adjust the observed OC and EC as:
+- EC = EC_unadj-OP
+- OC =OC_unadj+OP.
+IN the next model, I would like to include OP in the model to determine if the fit improves; under the rationalle that there are some systematic errors in the OP correction factor.
+3) Finally, FE explains little marginal SSR over and above SOIL. Probably indicating that FE can stand in for SOIL entirely (at least approximately). In other words, Fe in these samples is prodominantly associated wit Soil sources.
+
+
+```{r, "Part 3.2: Model 2, remove SOIL add OP",fig.cap="Figure A2.7: Diagnostics for 'Theoretical II' model (Fe for SOil, include OP)"}
+## --- fAbs against EC,OC,FE ---
+fit_FO2<-lm(fAbs~EC+OC+FE+OP-1,SW_DATA,weights=1/SW_DATA$fAbs_UNC^2)
+par(mfrow=c(2,2))
+plot(fit_FO2)
+summary(fit_FO2)
+glance(fit_FO2)
+## --- adjusted R^2 lower for this model than with SOIL! ---
+```
+
+```{r, "Part 3.2: Model 2 ANOVA and diagnostics",fig.cap="Figure A2.8: Cook's Distance and Stand. resid. vs. leverage for 'Theretical II' model (zoomed in)"}
+anova(fit_FO2)
+## --- Let's just look at residuals ---
+# --- Let's look at cook'sd distance...
+par(mfrow=c(1,2))
+plot(fit_FO2, which=4)
+plot(fit_FO2, which=5)
+```
+
+```{r, "Part 3.2: Model 2 ANOVA and diagnostics II",fig.cap="Figure A2.9: Side-by-Side box plots for standard. residuals and Cooks distance per SiteCode for 'Theoretical II' model"}
+## --- Let's look at side-by-side box-plots of fit residuals on a per site (SiteCode) basis ---
+A2<-augment(fit_FO2) #Tidy extract fit diagnostic info
+SW_DATA_A2<-add_column(SW_DATA,A2$.std.resid,A2$.cooksd)
+# -- Perhaps some of our behavior is explained by sampling biases ---
+
+Q1<-ggplot(SW_DATA_A2,aes(x=SiteCode,y=A2$.std.resid,color=SiteCode))+
+  geom_boxplot()+
+  theme(plot.title=element_text(hjust = 0.5,size=8))+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=6))+ylab("Standardized Residuals")+ggtitle("Standardized Residuals for Model 2")
+Q2<-ggplot(SW_DATA_A2,aes(x=SiteCode,y=A2$.cooksd,color=SiteCode))+
+  geom_boxplot()+
+  theme(plot.title=element_text(hjust = 0.5,size=8))+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=6))+ylab("Cook's Distance")+scale_y_log10()+ggtitle("Cook's Distance Model 2")
+grid.arrange(Q1,Q2,nrow=1)
+```
+##### --- Comments on Model 2 ---
+1) Substituting FE for SOIL and introducing OP does improve the fit, and arguably the residual behavior somewhat.
+2) Using SiteCode as a factor will probably help improve the fit as their may exist an additive sampling bias on a per site basis as box plots are not all centered at zero. Why does this indicate a sampling bias? Well, fAbs can never be nonzero at 0 EC concentration. It must have a zero intercept as nothing can absorb... nothing.
+3) In the case of NOGA1, PHOE1, PHOE5, and SYCA2 we might also see an interaction effect. Perhaps, this is due to multiplicative errors in sampling OR maybe the aerosol composition is distinctive at these sites. Let's consider subset selection before we just to interactions.
+
+### ---- Part 4: Additive models with SiteCode as catagorical variable ----
+
+```{r, "Part 4.1: Model 3 SiteID as Factor",fig.cap="Figure A2.10: Diagnostics plots for 'Theoretical III' model"}
+## ---- Let's find a citation... ----
+## ---- Categorical variable "SiteID" ----
+fit_FO3<-lm(fAbs~EC+OC+FE+OP+SiteCode-1,SW_DATA,weights=1/SW_DATA$fAbs_UNC^2)
+par(mfrow=c(2,2))
+plot(fit_FO3)
+summary(fit_FO3)
+glance(fit_FO3)
+#augment(fit_FO2)
+
+## --- Indeed. This model is far better now that a factor of "siteCode" is included. As expected, not all sites have significant intercepts, which makes sense given the preceeding plot.
+```
+```{r, "Part 4.2: Model 3 core diagnostics",fig.cap="Figure A2.11: Core diagnostics plots for 'Theoretical III' model (zoomed in)"}
+anova(fit_FO3)
+## --- Let's just look at residuals ---
+# --- Let's look at cook's distance...
+par(mfrow=c(1,2))
+#plot(fit_FO3, which=1)
+plot(fit_FO3, which=4)
+plot(fit_FO3, which=5)
+```
+
+```{r, "Part 4.3: Model 3 diagnostics on SiteCode",fig.cap="Figure A2.12: Side-by-Side boxplots for standardized residuals and Cook's Distance for 'Theoretical III' model"}
+A3<-augment(fit_FO3) #Tidy extract fit diagnostic info
+SW_DATA_A3<-add_column(SW_DATA,A3$.std.resid,A3$.cooksd)
+
+Q1<-ggplot(SW_DATA_A2,aes(x=SiteCode,y=A3$.std.resid,color=SiteCode))+
+  geom_boxplot()+
+  theme(plot.title=element_text(hjust = 0.5,size=8))+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=6))+ylab("Standardized Residuals")+ggtitle("Standardized Residuals for Model 2")
+Q2<-ggplot(SW_DATA_A2,aes(x=SiteCode,y=A3$.cooksd,color=SiteCode))+
+  geom_boxplot()+
+  theme(plot.title=element_text(hjust = 0.5,size=8))+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=6))+ylab("Cook's Distance")+scale_y_log10()+ggtitle("Cook's Distance Model 2")
+grid.arrange(Q1,Q2,nrow=1)
+```
+
+##### --- Comments on Model 3: ---
+
+--- Side-by-Side boxplots ---
+
+- It appears that influence may have been partially associated with sampler biases in the data as Cook's distance has now dropped overall. NOGA1 is still very influential (and error prone) where PHOE1, PHOE5, and SYCA2 now appear more reasonable in terms of their residual and Cook's distance distributions. 
+--- Standard residual plots ---
+- I'm not liking how the residuals appear rotated now that I introduced a categorical variable for SiteCode... Perhaps interaction terms with might help... 
+- HOWEVER, I'm hesitant to consider a interaction terms (at this point) on theoretical grounds as its possible that we just aren't including enough predictors in the model. Specifically, any heterogeneities (in terms of chemical composition) associated with these samples (from a given site) might not be connected to non-additive sampling biases but to genuine differences in aerosol composition. In other words, we should try to consider other predictor variables in an additive model first. If the residuals are sill not improved, then we should consider interaction terms.
+
+--- Rationale for Stepwise selection ---
+
+- To my knowledge, the literature doesn't indicate any more chemical species that should influence fAbs. 
+-Thus, stepwise selection is appropriate by considering all...
+
+1) Trace elements (tracer compounds, Al, Si, etc.)
+2) Non-proxy compounds, e.g., NO3 (nitrate) but not ammNO3 ammonium nitrate as ammonium was not directly measured. Specifically, all nitrate in the sample was ASSUMED to belong to ammonium nitrate. This is not necessarily a great approximation (in general) as sodium nitrate is also contained in aerosols. SOIL and SeaSalt are also excluded.
+3) PM2.5 and PM10 are excluded. PM2.5 is just total mass of aerosol on the sample with diameters <2.5microns. As such, this variable CONTAINS EC, OC, OP, etc. PM10 contains all of PM2.5 and corresponds to all mass on the sample less than 10 microns. 
+4) Exclude OC and EC fraction (e.g., EC1, OC2, etc.). THese are simply used for QC purposes in the IMPROVE network as OC=OC_unadj+OP=OC1+OC2+OC3+OC4+OP and EC=EC_unadj-OP=EC1+EC2+EC3-OP
+
+### --- Part 5: Additive models with stepAIC ---
+
+```{r, "Part 5.1: reformat data frame for stepAIC"}
+exclude_addl<-c("PM2.5","PM10","Date","POC","ammNO3","ammSO4","SeaSalt","SOIL","OC1","OC2","OC3","OC4","EC1","EC2","EC3","fAbs_MDL")
+SW_DATA_LRG<- SW_DATA_LRG %>% dplyr::select(!contains(exclude_addl) & !matches("_UNC") | matches("fAbs_UNC"))
+
+SW_DATA_LRG_test<- SW_DATA_LRG %>% dplyr::select(!contains(exclude_addl) & !matches("_UNC") | matches("fAbs_UNC"))
+
+## --- Part E: Checking data integrity (NAs) ---
+
+any(is.na(SW_DATA_LRG))
+
+### ---- Let's remove any NA values from the datatable ----
+SW_DATA_LRG<-SW_DATA_LRG[which(complete.cases(SW_DATA_LRG)),]
+
+head(SW_DATA_LRG)
+```
+
+```{r}
+SW_DATA_LRG_test<-SW_DATA_LRG[ind_test,]
+SW_DATA_LRG<-SW_DATA_LRG[-ind_test,]
+
+```
+
+```{r, "Step 5.2: stepAIC for first order model",fig.cap="Figure A2.13: diagnostic plots for 'First order stepAIC' model"}
+n<-nrow(SW_DATA_LRG)
+w_ii<-1/(SW_DATA_LRG$fAbs_UNC^2) #Weights for WLS
+EC_only_mod <- lm(fAbs~EC-1, data=SW_DATA_LRG,weights=w_ii) 
+full_mod <- lm(fAbs ~ . - fAbs -fAbs_UNC -1, data=SW_DATA_LRG,weights=w_ii)
+
+## --- Let's use AIC ---
+fit_FO4<-stepAIC(EC_only_mod,scope=list(upper=formula(full_mod), lower = formula(EC_only_mod)), direction="both", k=2, trace = FALSE)
+summary(fit_FO4)
+formula(fit_FO4)
+par(mfrow=c(2,2))
+plot(fit_FO4)
+glance(fit_FO4)
+```
+```{r, "Part 5.3: Model 4 core diagnostics",fig.cap="Figure A2.14: diagnostic plots for 'First order stepAIC' model (zoomed in)"}
+anova(fit_FO4)
+A4<-augment(fit_FO4)
+## --- Let's just look at residuals ---
+# --- Let's look at cook's distance...
+#plot(fit_FO4, which=1)
+par(mfrow=c(1,2))
+plot(fit_FO4, which=4)
+plot(fit_FO4, which=5)
+```
+```{r,fig.cap="Figure A2.15: Coorplot for 'First order stepAIC' model selected predictors"}
+## --- Let's look at corrplot of selected species
+stepAIC_vars1<-attr(fit_FO4$terms,"term.labels")
+stepAIC_vars<-stepAIC_vars1[stepAIC_vars1 != "SiteCode"]
+SW_DATA_step<-SW_DATA_LRG %>%
+  dplyr::select(all_of(stepAIC_vars))
+R_AIC<-cor(SW_DATA_step)
+corrplot(R_AIC,title="Correlation matrix of predictors",mar=c(0,0,2,0),order="FPC",pch.cex=0.75)
+
+```
+#### --- Comment on stepAIC model ---
+For AIC criterion:
+1) The importance of Si again makes sense as it's a strong tracer for soil-- I would suspect probably more reliable than Fe. SiteCode is again important, we we know. It's important to remember that Soil species (Al,Ca,Si,Fe,Ti and sometimes Mg,K) are all highly correlated which complicates an interpretation as to independent partial contributions to the model (see correlation table of stepwise selected species).
+2) FE, SI,CA,TI, and MG are probably related to Soil species which were already explored. It's interesting that Al was left out.
+3) The marginal contribution to SSR for the trace elements, after OP and excluding Soil species, are probably related to composition differences in the aerosol associated with either a site or even individual samples. FOr example, Na is typically associated with marine aerosol while Cu is either connected to industrial sources and Zn to traffic emissions. THe point: these are usually unreliable tracers in 24hours samples (like these) and probably correspond to some odd pollution days.
+4) Again, it should be noted that attributing any "effects" to particular partial coefficients is impossible given that these species are all highly collinear (see below).
+5) Arguably, it seems plausible that this is the best first order model possible, given (likely) non-linear behavior in EC. After more diagnostics, I hypothesize that only adding a polynomial term for EC will suffice to "correct" the residuals.
+
+```{r, "Part 5.4: Model 4 core diagnostics by SiteCode",fig.cap="Figure A2.16: side-by-side boxplot for stand. resid, and Cook's D for 'First order stepAIC' model"}
+SW_DATA_LRG_A4<-add_column(SW_DATA_LRG,A4$.std.resid,A4$.cooksd)
+Q1<-ggplot(SW_DATA_LRG_A4,aes(x=SiteCode,y=A4$.std.resid,color=SiteCode))+
+  geom_boxplot()+
+  theme(plot.title=element_text(hjust = 0.5,size=8))+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=6))+ylab("Standardized Residuals")+ggtitle("Standardized Residuals for stepAIC model")
+Q2<-ggplot(SW_DATA_LRG_A4,aes(x=SiteCode,y=A4$.cooksd,color=SiteCode))+
+  geom_boxplot()+
+  theme(plot.title=element_text(hjust = 0.5,size=8))+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=6))+ylab("Cook's Distance")+scale_y_log10()+ggtitle("Cook's Distance stepAIC model")
+grid.arrange(Q1,Q2,nrow=1)
+```
+
+##### --- Comments on boxplots of residuals ---
+
+1) Samples from the NOGA1 site have very high standardize residuals and cook's distance on average.
+2) Perhaps this indicates a unique assemblage of aerosol sources OR a bad field sampler (this happens from time to time).
+3) WHPE1 has some fairly high residuals... probable outliers
+4) SYCA2 is influential now, on average, probably indicating unique aerosol composition as well.
+5) (on hold) Let's investigate these predictors using PCA biplots and color plots based on SiteCode. Perhaps, NOGA1 stands out in terms of aerosol composition (indicating that sampler is OK).
+
+## --- Part 6: stepAIC variables + higher order EC ---
+##### Biggest issue is that order of variable inclusion important...
+```{r, eval=FALSE}
+SW_DATA_stepf<-add_column(SW_DATA_step,"fAbs" = SW_DATA_LRG$fAbs,SiteCode=SW_DATA_LRG$SiteCode)
+fit_FO5<-lm(update(formula(fit_FO4),~.+ I(EC^2)),SW_DATA_stepf,weights=1/SW_DATA_LRG$fAbs_UNC^2)
+par(mfrow=c(2,2))
+plot(fit_FO5)
+summary(fit_FO5)
+glance(fit_FO5)
+```
+```{r, "Part 6.3: Model 5 core diagnostics", eval=FALSE}
+anova(fit_FO5)
+A5<-augment(fit_FO5)
+## --- Let's just look at residuals ---
+# --- Let's look at cook's distance...
+par(mfrow=c(1,2))
+#plot(fit_FO5, which=1)
+plot(fit_FO5, which=4)
+plot(fit_FO5, which=5)
+```
+
+### --- Comments on Model 6 ---
+
+1) It seems to have improved the fit (not the residuals much)... We have a new influential sample (ugh).
+2) As much as I hate beating this data to death, it might be best to consider stepAIC for all polynomial terms...
+
+## --- Model 6: stepAIC with all polynomial terms (no interactions) ---
+
+```{r, Model 6.1: stepAIC with polynomial terms,fig.cap="Figure A2.17: Core diagnostics for 'Polynomial stepAIC' model"}
+n<-nrow(SW_DATA_LRG)
+w_ii<-1/(SW_DATA_LRG$fAbs_UNC^2) #Weights for WLS
+EC_only_mod <- lm(fAbs~EC-1, data=SW_DATA_LRG,weights=w_ii) 
+
+f<-update(formula(full_mod), ~ +.+I(EC^2)+I(OC^2)+I(OP^2)+I(AL^2)+I(AS^2)+I(BR^2)+I(CA^2)+I(CL^2)+I(CR^2)+I(CU^2)+I(FE^2)+I(PB^2)+I(MG^2)+I(MN^2)+I(NI^2)+I(NO3^2)+I(N2^2)+I(P^2)+I(K^2)+I(RB^2)+I(SE^2)+I(SI^2)+I(NA.^2)+I(SR^2)+I(SO4^2)+I(S^2)+I(TI^2)+I(V^2)+I(ZN^2)+I(ZR^2))
+
+full_mod2 <- lm(f, data=SW_DATA_LRG,weights=w_ii)
+
+## --- Let's use BIC for smaller model ---
+fit_FO6<-stepAIC(EC_only_mod,scope=list(upper=formula(full_mod2), lower = formula(EC_only_mod)), direction="both", k=log(n), trace = FALSE)
+summary(fit_FO6)
+formula(fit_FO6)
+par(mfrow=c(2,2))
+plot(fit_FO6)
+glance(fit_FO6)
+```
+```{r, "Part 6.2: Model 6 core diagnostics",fig.cap="Figure A2.18: COre diagnostics for 'Polynomial stepAIC' model (zoomed)"}
+anova(fit_FO6)
+A6<-augment(fit_FO6)
+## --- Let's just look at residuals ---
+# --- Let's look at cook's distance...
+#plot(fit_FO6, which=1)
+par(mfrow=c(1,2))
+plot(fit_FO6, which=4)
+plot(fit_FO6, which=5)
+```
+```{r, "Model 6.3: side-by-side boxplots",fig.cap="Figure A2.19: side-by-side boxplot for stand. resid, and Cook's D for 'Polynomial stepAIC' model"}
+SW_DATA_LRG_A6<-add_column(SW_DATA_LRG,A6$.std.resid,A6$.cooksd)
+Q1<-ggplot(SW_DATA_LRG_A6,aes(x=SiteCode,y=A6$.std.resid,color=SiteCode))+
+  geom_boxplot()+
+  theme(plot.title=element_text(hjust = 0.5,size=8))+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=6))+ylab("Standardized Residuals")+ggtitle("Standardized Residuals for Poly stepAIC model")
+Q2<-ggplot(SW_DATA_LRG_A6,aes(x=SiteCode,y=A6$.cooksd,color=SiteCode))+
+  geom_boxplot()+
+  theme(plot.title=element_text(hjust = 0.5,size=8))+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=6))+ylab("Cook's Distance")+scale_y_log10()+ggtitle("Cook's Distance Poly stepAIC model")
+grid.arrange(Q1,Q2,nrow=1)
+```
+
+#### --- Comments on Polynomial stepAIC model ---
+
+1) First, this model is fairly defensible on theoretical grounds... and the residuals look pretty good.
+2) Notably, SiteCode was not selected which tends to make the standard residuals-- plotted on a per site basis -- dance a bit more around zero than I'd like.
+3) One not-so defensible aspect of this model are the squared terms for the tracer compounds. These terms are qholly empirical and (probably) indicate some overfitting. Notably, their marginal SSRs are very low (< 100). Thus, I think only the carbon terms (OC,EC,OP) should be squared and searched.
+4) The signficance of OP^2 is not surprising given it's function as a sort of "fudge factor" for the thermal analysis method used to estimate OC and EC. It's a long story but I'm not ready to throw this squared term out.
+5) FYI: The upperscale of the Cook's distance boxplots (compared to) previous runs is significantly smaller-- indicating that per-site leverage is far lower in this model.
+
+## --- Model 7: stepAIC with only squared carbon terms ---
+
+- From the beginning of this analysis, it seemed plausible that EC needed to be squared. Perhaps since OC,EC, and OP are all correlated strongly, these should be squared as well. 
+- LEt's try it out in stepAIC: I expect all carbon terms to show up and SiteCode will be included again.
+
+```{r, "Model 7.1: stepAIC with carbon polynomial terms",fig.cap="Figure A2.20: core diagnostics for 'Carbon Polynomial stepAIC' model"}
+n<-nrow(SW_DATA_LRG)
+w_ii<-1/(SW_DATA_LRG$fAbs_UNC^2) #Weights for WLS
+EC_only_mod <- lm(fAbs~EC-1, data=SW_DATA_LRG,weights=w_ii) 
+
+f2<-update(formula(full_mod), ~ +.+I(EC^2)+I(OC^2)+I(OP^2))
+
+full_mod3 <- lm(f2, data=SW_DATA_LRG,weights=w_ii)
+
+## --- Let's use BIC for smaller model ---
+fit_FO7<-stepAIC(EC_only_mod,scope=list(upper=formula(full_mod3), lower = formula(EC_only_mod)), direction="both", k=log(n), trace = FALSE)
+summary(fit_FO7)
+formula(fit_FO7)
+par(mfrow=c(2,2))
+plot(fit_FO7)
+glance(fit_FO7)
+```
+```{r, "Part 7.2: Model 7 core diagnostics",fig.cap="Figure A2.21: Core diagnostics for 'Carbon Polynomial stepAIC' model (zoomed)"}
+anova(fit_FO7)
+A7<-augment(fit_FO7)
+## --- Let's just look at residuals ---
+# --- Let's look at cook's distance...
+#plot(fit_FO7, which=1)
+par(mfrow=c(1,2))
+plot(fit_FO7, which=4)
+plot(fit_FO7, which=5)
+```
+
+```{r, "Model 7.3: side-by-side boxplots",fig.cap="Figure A2.22: side-by-side boxplot for stand. resid, and Cook's D for 'Carbon Polynomial stepAIC' model"}
+SW_DATA_LRG_A7<-add_column(SW_DATA_LRG,A7$.std.resid,A7$.cooksd)
+Q1<-ggplot(SW_DATA_LRG_A7,aes(x=SiteCode,y=A7$.std.resid,color=SiteCode))+
+  geom_boxplot()+
+  theme(plot.title=element_text(hjust = 0.5,size=8))+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=6))+ylab("Standardized Residuals")+ggtitle("Standardized Residuals for Poly stepAIC model")
+
+Q2<-ggplot(SW_DATA_LRG_A7,aes(x=SiteCode,y=A7$.cooksd,color=SiteCode))+
+  geom_boxplot()+
+  theme(plot.title=element_text(hjust = 0.5,size=8))+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=6))+ylab("Cook's Distance")+scale_y_log10()+ggtitle("Cook's Distance Poly stepAIC model")
+grid.arrange(Q1,Q2,nrow=1)
+```
+
+### --- Comments on Model 7 ---
+
+1) While not as beautiful as the last model (in terms of residuals), this model is still very reasonable and more defensible IMO.
+2) Overall, we see (again) that variables all highly correlated to soil are selected (Ca,Si,Fe,Mg,Ti,K), some NaCl indicating likely marine impacts, 
+3) Contrary to my expectations, SiteCode was not needed which does make each site mode influential on a site-by-site basis.
+4) Regardless, I like this model. I think it's time to look at how well our top models predict samples in the test set.
+
+
+## --- Step 8: Model predictions, test set performances ---
+
+```{r, Part 8.1, Predictions and performance metrics for TOP models"}
+## --- Model predictions ---
+Yhat_3<-predict(fit_FO3, SW_DATA_test)
+Yhat_4<-predict(fit_FO4, SW_DATA_LRG_test)
+Yhat_6<-predict(fit_FO6, SW_DATA_LRG_test)
+Yhat_7<-predict(fit_FO7, SW_DATA_LRG_test)
+## --- Test set errors per model --
+# --- Didn't screen all NAs from test set ---
+e_3<-SW_DATA_test$fAbs-Yhat_3
+e_4<-SW_DATA_LRG_test$fAbs-Yhat_4
+e_6<-SW_DATA_LRG_test$fAbs-Yhat_6
+e_7<-SW_DATA_LRG_test$fAbs-Yhat_7
+e_3<-e_3[complete.cases(e_3)]
+e_4<-e_4[complete.cases(e_4)]
+e_6<-e_6[complete.cases(e_6)]
+e_7<-e_7[complete.cases(e_7)]
+## --- Performance metrics ---
+SSE_3<-sum(e_3^2)
+SSE_4<-t(e_4)%*%e_4
+SSE_6<-t(e_6)%*%e_6
+SSE_7<-t(e_7)%*%e_7
+Y_3<-SW_DATA_test$fAbs
+Y_467<-SW_DATA_LRG_test$fAbs
+SST_3<-sum((Y_3-mean(Y_3))^2)
+SST_4<-sum((Y_467-mean(Y_467))^2)
+SST_6<-sum((Y_467-mean(Y_467))^2)
+SST_7<-sum((Y_467-mean(Y_467))^2)
+## --- Rsquared ---
+Rsqrd_3<-1-SSE_3/SST_3
+Rsqrd_4<-1-SSE_4/SST_4
+Rsqrd_6<-1-SSE_6/SST_6
+Rsqrd_7<-1-SSE_7/SST_7
+## --- RMSEP ---
+RMSEP_3<-sqrt(SSE_3/length(e_3))
+RMSEP_4<-sqrt(SSE_4/length(e_4))
+RMSEP_6<-sqrt(SSE_6/length(e_6))
+RMSEP_7<-sqrt(SSE_7/length(e_7))
+## --- mean absolute percentage error (MAPE) ---
+## --- Need to exclude all zero fAbs values ---
+abs_rel_diff3<-abs(e_3/Y_3)
+abs_rel_diff4<-abs(e_4/Y_467)
+abs_rel_diff6<-abs(e_6/Y_467)
+abs_rel_diff7<-abs(e_7/Y_467)
+
+# --- Histogram of rel_diff: log transform ---
+#par(mfrow=c(2,2))
+#hist(log(abs_rel_diff3))
+#hist(log(abs_rel_diff4))
+#hist(log(abs_rel_diff6))
+#hist(log(abs_rel_diff7))
+
+# --- Log transform, find mean, transform back
+MAPE_3<-100*exp(mean(log(abs_rel_diff3[!is.infinite(abs_rel_diff3)]),na.rm=TRUE))
+MAPE_4<-100*exp(mean(log(abs_rel_diff4[!is.infinite(abs_rel_diff4)]),na.rm=TRUE))
+MAPE_6<-100*exp(mean(log(abs_rel_diff6[!is.infinite(abs_rel_diff6)]),na.rm=TRUE))
+MAPE_7<-100*exp(mean(log(abs_rel_diff7[!is.infinite(abs_rel_diff7)]),na.rm=TRUE))
+## --- Maybe compare to relative uncertainty? ---
+rel_unc<-SW_DATA_all$fAbs_UNC[SW_DATA_all$fAbs > 0]/SW_DATA_all$fAbs[SW_DATA_all$fAbs > 0]
+abs_rel_unc<-abs(rel_unc[!is.infinite(rel_unc)])
+MARU<-exp(mean(log(abs_rel_unc)))
+
+```
+
+```{r, "Part 8.2: MAPE for the training sets"}
+abs_rel_diff3trn<-abs((SW_DATA$fAbs-fit_FO3$fitted.values)/SW_DATA$fAbs)
+abs_rel_diff4trn<-abs((SW_DATA_LRG$fAbs-fit_FO4$fitted.values)/SW_DATA_LRG$fAbs)
+abs_rel_diff6trn<-abs((SW_DATA_LRG$fAbs-fit_FO6$fitted.values)/SW_DATA_LRG$fAbs)
+abs_rel_diff7trn<-abs((SW_DATA_LRG$fAbs-fit_FO7$fitted.values)/SW_DATA_LRG$fAbs)
+# --- Mean absolute percentage error (training set) ---
+MAPE_3trn<-100*exp(mean(log(abs_rel_diff3trn[!is.infinite(abs_rel_diff3trn)]),na.rm=TRUE))
+MAPE_4trn<-100*exp(mean(log(abs_rel_diff4trn[!is.infinite(abs_rel_diff4trn)]),na.rm=TRUE))
+MAPE_6trn<-100*exp(mean(log(abs_rel_diff6trn[!is.infinite(abs_rel_diff6trn)]),na.rm=TRUE))
+MAPE_7trn<-100*exp(mean(log(abs_rel_diff7trn[!is.infinite(abs_rel_diff7trn)]),na.rm=TRUE))
+## --- Maybe compare to relative uncertainty? ---
+
+```
+
+
+```{r, "Part 8.2: bootstrap CIs for MARU"}
+## --- BS function ---
+MARU_boot_fun<-function(abs_rel_diff,indices){
+  MARU_out<-exp(mean(log(abs_rel_diff[indices])))
+  return(MARU_out)
+}
+
+## --
+MARU_BS<-boot(abs_rel_unc, statistic=MARU_boot_fun, R=2000)
+MARU_CI<-boot.ci(MARU_BS,conf=0.95,type="perc")
+MARU_CI
+```
+
+```{r, "Part 8.3: observed versus predicted"}
+TOP_MOD_fit<-tibble(Y_3=Y_3,Yhat_3=Yhat_3,Y_4=Y_467,Yhat_4=Yhat_4,Y_6=Y_467,Yhat_6=Yhat_6,Y_7=Y_467,Yhat_7=Yhat_7,SiteCode=SW_DATA_test$SiteCode)
+```
+
+```{r,warning=FALSE,fig.cap="Figure A2.23: Cross plots for selected models in Table 1"}
+M3<-qplot(Y_3,Yhat_3, data = TOP_MOD_fit, main="Theoretical III: Predicted versus Observed fAbs",xlim=c(0,50),ylim=c(0,50))+
+  theme(plot.title = element_text(hjust = 0.5,size =8))+ylab("fAbs (pred.)")+xlab("fAbs (obs.)")+ geom_segment(x=0,y=0,xend=50,yend=50,size=1)+ geom_smooth(method="lm",se=FALSE,linetype=2,color="red")
+M4<-qplot(Y_4,Yhat_4, data = TOP_MOD_fit, main="First order stepAIC: Predicted versus Observed fAbs",xlim=c(0,50),ylim=c(0,50))+
+  theme(plot.title = element_text(hjust = 0.5,size =8))+ylab("fAbs (pred.)")+xlab("fAbs (obs.)")+ geom_segment(x=0,y=0,xend=50,yend=50,size=1)+ geom_smooth(method="lm",se=FALSE,linetype=2,color="red")
+M6<-qplot(Y_6,Yhat_6, data = TOP_MOD_fit, main="Polynomial stepAIC: Predicted versus Observed fAbs",xlim=c(0,50),ylim=c(0,50))+
+  theme(plot.title = element_text(hjust = 0.5,size =8))+ylab("fAbs (pred.)")+xlab("fAbs (obs.)")+ geom_segment(x=0,y=0,xend=50,yend=50,size=1)+ geom_smooth(method="lm",se=FALSE,linetype=2,color="red")
+M7<-qplot(Y_7,Yhat_7, data = TOP_MOD_fit, main="Carbon Polynomial: Predicted versus Observed fAbs",xlim=c(0,50),ylim=c(0,50))+
+  theme(plot.title = element_text(hjust = 0.5,size =8))+ylab("fAbs (pred.)")+xlab("fAbs (obs.)")+ geom_segment(x=0,y=0,xend=50,yend=50,size=1)+ geom_smooth(method="lm",se=FALSE,linetype=2,color="red")
+
+grid.arrange(M3,M4,M6,M7,nrow=2)
+```
+
+### --- Residuals plot comparison for report ---
+
+```{r,fig.cap="Figure (4) & A2.24: Standardize Residual comparison for the top models in Table 1"}
+par(mfrow=c(2,2))
+plot(fit_FO3, which=5)
+plot(fit_FO4, which=5)
+plot(fit_FO6, which=5)
+plot(fit_FO7, which=5)
+```
+#### --- Bootstrapping CIs for reg. coefficients ---
+
+```{r}
+# function to obtain regression weights
+bs <- function(formula, data_in, indices) {
+  d <- data_in[indices,] # allows boot to select sample
+  w_ii<-1/d$fAbs_UNC^2
+  fit <- lm(formula, data=d,weights = w_ii)
+  return(coef(fit))
+}
+# ---- bootstrapping with 1000 replications ----
+BS_FO3 <- boot(data=SW_DATA, statistic=bs,
+   R=1000, formula=formula(fit_FO3))
+boot.ci(BS_FO3,conf=0.95,type="perc",index=1) #EC
+
+BS_FO4 <- boot(data=SW_DATA_LRG, statistic=bs,
+   R=1000, formula=formula(fit_FO4))
+boot.ci(BS_FO4,conf=0.95,type="perc",index=1) #EC
+
+BS_FO6 <- boot(data=SW_DATA_LRG, statistic=bs,
+   R=1000, formula=formula(fit_FO6))
+boot.ci(BS_FO6,conf=0.95,type="perc",index=1) #EC
+
+BS_FO7 <- boot(data=SW_DATA_LRG, statistic=bs,
+   R=1000, formula=formula(fit_FO7))
+boot.ci(BS_FO7,conf=0.95,type="perc",index=1) #EC
+
+```
+
+
+#### --- Failed PCA idea ---
+
+Not informative
+
+```{r, "Part 5.5: PCA of stepAIC selected predictors",eval=FALSE}
+
+## --- Not informative!! ---
+stepAIC_vars1<-attr(fit_FO4$terms,"term.labels")
+stepAIC_vars<-stepAIC_vars1[stepAIC_vars1 != "SiteCode"]
+SW_DATA_PCA<-SW_DATA_LRG %>% dplyr::select(all_of(stepAIC_vars))
+## --- I'm not going to standardize as that not what was done in the regression model ---
+
+## --- Let's normalize the data by PM ---
+SW_DATA_PCA2<-SW_DATA_all[-ind_test,] %>% dplyr::select(all_of(stepAIC_vars) | matches("PM2.5") & !contains("UNC"))
+
+SW_DATA_PCA_norm1<-SW_DATA_PCA2 %>% transmute(all_of(SW_DATA_PCA2)/PM2.5)
+SW_DATA_PCA_norm<-SW_DATA_PCA_norm1 %>% dplyr::select(!matches("PM2.5"))
+
+SW_DATA_PCA_norm<-SW_DATA_PCA_norm[complete.cases(SW_DATA_PCA_norm),]
+
+# --- Check that all are less than 1, which must be true otherwise mass balance is violated ---
+##---------------------------------------
+
+PCA_stepAIC<-prcomp(log(data.matrix(SW_DATA_PCA_norm)+1), center=TRUE,scale=FALSE)
+## --- Check out the scree plot ---
+screeplot(PCA_stepAIC,type="lines")
+
+ggbiplot(PCA_stepAIC, choices = 1:2, groups =SW_DATA_LRG$SiteCode)
+biplot(PCA_stepAIC, choices = 1:2,xlabs = rep(".",nrow(SW_DATA_PCA)))
+ggbiplot(PCA_stepAIC, choices = 2:3, groups =SW_DATA_LRG$SiteCode)
+biplot(PCA_stepAIC, choices = 2:3,xlabs = rep(".",nrow(SW_DATA_PCA)))
+ggbiplot(PCA_stepAIC, choices = 3:4, groups =SW_DATA_LRG$SiteCode)
+biplot(PCA_stepAIC, choices = 3:4,xlabs = rep(".",nrow(SW_DATA_PCA)))
+```
+
+```{r, "Table A2.1: Checking fraction of SSR explained by EC"}
+R2_EC<-sum(anova(fit_FO)$'Sum Sq'[1])/sum(anova(fit_FO)$'Sum Sq')
+R2_EC2<-sum(anova(fit_FO2)$'Sum Sq'[1])/sum(anova(fit_FO2)$'Sum Sq')
+R2_EC3<-sum(anova(fit_FO3)$'Sum Sq'[1])/sum(anova(fit_FO3)$'Sum Sq')
+R2_EC4<-sum(anova(fit_FO4)$'Sum Sq'[1])/sum(anova(fit_FO4)$'Sum Sq')
+R2_EC6<-sum(anova(fit_FO6)$'Sum Sq'[1])/sum(anova(fit_FO6)$'Sum Sq')
+R2_EC7<-sum(anova(fit_FO7)$'Sum Sq'[1])/sum(anova(fit_FO7)$'Sum Sq')
+#Ah yes, of course!
+```
+
+
+
