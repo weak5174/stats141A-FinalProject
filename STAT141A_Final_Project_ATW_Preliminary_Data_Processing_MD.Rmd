@@ -1,0 +1,65 @@
+---
+title: "STA141A-ATW-Markdown"
+author: "Andrew T. Weakley"
+date: "12/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(broom)
+library(gridExtra)
+library(MASS)
+library(Hmisc)
+library(corrplot)
+library(eivtools)
+library(ggbiplot)
+library(boot)
+```
+
+### --- Step 1: Data loading and procressing ---
+
+```{r, "Part A-C: Load and process data I"}
+## --- Part a: Upload Metadata for samples ---
+path_data<-file.path(getwd(),"data")
+META_DATA<-as_tibble(read.csv(file.path(path_data,"IMPROVE_metadata.csv")))
+## --- Filter samples from Korea and Canada ---
+US_META<-META_DATA %>% filter(Country %nin% c("KR","CA"))
+
+
+## --- Filter stats not in continental US ---
+US_META<-META_DATA %>% filter(State %nin% c("HI","AK","VI"))
+
+## --- Part b: Load samples data ---
+DATA<-as_tibble(read.csv(file.path(path_data,"IMPROVE_2015_data_w_UNC_v2.csv")))
+
+## --- Part c: Select samples from SW given site identifiers from SW_META table ("Code")
+US_DATA_all<-as_tibble(DATA %>% filter(SiteCode %in% US_META$Code))
+```
+
+```{r,"Part D: Check for gross absorbance violations"}
+# Let's identify any samples that (grossly) violate PM2.5 mass balances
+# PM2.5 (=Y) cannot be negative!
+# Since there's some probability that PM2.5 is negative due to errors at low concentration, we may use PM2.5 uncertainties to remove samples that fall outside -3*PM2.5_UNC.
+# In this way, we don't risk censoring the data but do remove likely erroneous data.
+US_DATA_all<-US_DATA_all %>% dplyr::filter(PM2.5 > -3*PM2.5_UNC)
+```
+
+```{r, "Screen proxies, constructs, PM, and useless things"}
+exclude<-c("PM2.5","PM10","POC","ammNO3","ammSO4","SOIL","SeaSalt","OC1","OC2","OC3","OC4","EC1","EC2","EC3","fAbs_MDL")
+US_DATA_LRG<- US_DATA_all %>% dplyr::select(!contains(exclude) & !matches("_UNC") | matches("PM2.5_UNC"))
+any(is.na(US_DATA_LRG))
+US_DATA_LRG<-US_DATA_LRG[which(complete.cases(US_DATA_LRG)),]
+any(is.na(US_DATA_LRG))
+```
+
+```{r, "Part F: Partition data into training and testing sets"}
+## --- Instead of random partitioning, I will partition by first sorting samples by SiteCode and DATE (already done) and place every other sample in the test set.
+# --- This data has seasonality. Sorting by date therefore ensures seasonality is equivalent between datasets
+n<-nrow(US_DATA_LRG)
+ind_test<-seq(1,n,2)
+US_DATA_LRG_test<-US_DATA_LRG[ind_test,]
+US_DATA_LRG<-US_DATA_LRG[-ind_test,]
+```
+
