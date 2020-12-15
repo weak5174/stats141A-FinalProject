@@ -16,6 +16,7 @@ library(corrplot)
 library(eivtools)
 library(ggbiplot)
 library(boot)
+library(mclust)
 ```
 
 ### --- Step 1: Data loading and procressing ---
@@ -47,7 +48,7 @@ US_DATA_all<-US_DATA_all %>% dplyr::filter(PM2.5 > -3*PM2.5_UNC)
 ```
 
 ```{r, "Screen proxies, constructs, PM, and useless things"}
-exclude<-c("fAbs","PM10","POC","ammNO3","ammSO4","SOIL","SeaSalt","OC1","OC2","OC3","OC4","EC1","EC2","EC3","fAbs_MDL")
+exclude<-c("PM10","POC","ammNO3","ammSO4","SOIL","SeaSalt","OC1","OC2","OC3","OC4","EC1","EC2","EC3","fAbs_MDL","fAbs")
 US_DATA_LRG<- US_DATA_all %>% dplyr::select(!contains(exclude) & !matches("_UNC") | matches("PM2.5_UNC"))
 any(is.na(US_DATA_LRG))
 US_DATA_LRG<-US_DATA_LRG[which(complete.cases(US_DATA_LRG)),]
@@ -61,5 +62,14 @@ n<-nrow(US_DATA_LRG)
 ind_test<-seq(1,n,2)
 US_DATA_LRG_test<-US_DATA_LRG[ind_test,]
 US_DATA_LRG<-US_DATA_LRG[-ind_test,]
+```
+
+### --- Step 2: mclust for GMMs ---
+
+```{r}
+## --- Normalize US data by PM2.5 conc --
+US_DATA_LRG_PM_norm<-US_DATA_LRG %>% dplyr::select(everything()/"PM2.5")
+#rename_with()
+
 ```
 
