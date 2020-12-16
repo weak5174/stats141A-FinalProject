@@ -7,20 +7,23 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+# --- Data processing and viz ---
 library(tidyverse)
 library(broom)
 library(gridExtra)
-library(MASS)
-library(Hmisc)
+library(RColorBrewer)
+# --- Stats---
 library(corrplot)
-library(ggfortify)
 library(boot)
 library(mclust)
 library(PCAtools)
-library(RColorBrewer)
-library(spatial)
-library(raster)
-library(sp)
+library(MASS)
+library(Hmisc)
+# --- Spatial Analysis ---> Let's simplify our life haha
+library(tmap)
+library(leaflet)
+#library(sp)
+library(sf)
 ```
 
 ### --- Step 0: Packages to mess with --
@@ -45,6 +48,12 @@ US_META<-META_DATA %>% filter(Country %nin% c("KR","CA"))
 
 ## --- Filter stats not in continental US ---
 US_META<-META_DATA %>% filter(State %nin% c("HI","AK","VI"))
+
+## -- Use Mississippi River as a dividing point for WEst-East US --
+MR_coords<-c(47.239722, -95.2075)
+POS_Sampler<-as.numeric(US_META$Longitude <MR_coords[2])
+# --- 1 are WEst US, 0 are East
+US_META<-add_column(US_META,WE_US = POS_Sampler)
 
 ## --- Part b: Load samples data ---
 DATA<-as_tibble(read.csv(file.path(path_data,"IMPROVE_2015_data_w_UNC_v2.csv")))
@@ -122,8 +131,20 @@ US_PCA_DATA_slim<-as_tibble(dplyr::select(US_DATA_LRG_PM_norm,!contains(c("SiteC
 # Damn! It does a transposed form of PCA bleh ---
 US_PCA<-pca(US_PCA_DATA_slim,transposed = TRUE)
 
+## --- Find elbow point on screeplot ---
+elbow <- findElbowPoint(US_PCA$variance)
+elbow  
+horn <- parallelPCA(US_PCA_DATA_slim)
+horn$n
+```
+```{r}
+## --- Screeplot ---
   PCAtools::screeplot(US_PCA,
-    components = getComponents(US_PCA, 1:10))+ggtitle("Explained Variance plot (negative <1%))")
+    components = getComponents(US_PCA, 1:10),vline = c(horn$n, elbow))+ggtitle("Explained Variance plot")+theme(plot.title = element_text(hjust=0.5))+
+    geom_label(aes(x = horn$n +0.5, y = 75,
+      label = 'Horn\'s Method', vjust = 0, size = 5)) +
+    geom_label(aes(x = elbow + 0.5, y = 55,
+      label = 'Elbow method', vjust = 0, size = 5))
 
 ## --- Extract scores ---
 scores<-as_tibble(US_PCA$rotated)
@@ -133,59 +154,154 @@ US_DATA_w_scores<-add_column(US_DATA_LRG,scores)
 ## --- Extract loadings (format as tibble)---
 loadings<-as_tibble(US_PCA$loadings,rownames="species")
 loadings
+
 ```
 
-```{r, "Loading plots against species"}
+```{r, "PC Loading plots against species"}
+## --- PC1 ---
 ggplot(data = loadings, mapping=aes(x=species,y=PC1,color=PC1))+geom_point()+
   theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Organic Carbon Component")+theme(plot.title = element_text(hjust = 0.5))
 
+## --- PC2 ---
 ggplot(data = loadings, mapping=aes(x=species,y=PC2,color=PC2))+geom_point()+
   theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Anion composition component")+theme(plot.title = element_text(hjust = 0.5))
 
+## --- PC3 ---
 ggplot(data = loadings, mapping=aes(x=species,y=PC3,color=PC3))+geom_point()+
   theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Contrast between NO3 and SO4")+theme(plot.title = element_text(hjust = 0.5))
 
+## --- PC4 ---
 ggplot(data = loadings, mapping=aes(x=species,y=PC4,color=PC4))+geom_point()+
   theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Soil Composition Component")+theme(plot.title = element_text(hjust = 0.5))
+
+## --- PC5 ---
+ggplot(data = loadings, mapping=aes(x=species,y=PC5,color=PC5))+geom_point()+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Total Carbon (OC,EC) + OP adjustment + Marginal Marine Contribution")+theme(plot.title = element_text(hjust = 0.5))
+
+## --- PC6 ---
+ggplot(data = loadings, mapping=aes(x=species,y=PC6,color=PC6))+geom_point()+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Marine Aerosol (Na,Cl,Mg) + Marginal EC Contribution")+theme(plot.title = element_text(hjust = 0.5))
+
 ```
 
 ```{r, "PC(1,2) Score plots colored based on high loadings"}
 P1<-ggplot(data =US_DATA_w_scores,aes(x = PC1, y = PC2)) +
-	geom_point(mapping = aes(color = log(SO4+NO3)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(1,2) scores: on log anion (NO3+SO4) Concentration")
+	geom_point(mapping = aes(color = log(SO4+NO3)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(1,2) scores: log Anions (NO3+SO4)")
 P2<-ggplot(data =US_DATA_w_scores,aes(x = PC1, y = PC2)) +
-	geom_point(mapping = aes(color = log(OC)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(1,2) scores on Organic Carbon log OC Concentration")
+	geom_point(mapping = aes(color = log(OC)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(1,2) scores: log Organic Carbon (OC)")
 
 grid.arrange(P1,P2,nrow=1)
 ```
 
 ```{r, "PC(3,4) Score plots colored based on high loadings"}
-P1<-ggplot(data =US_DATA_w_scores,aes(x = PC3, y = PC4)) +
-	geom_point(mapping = aes(color = log(SO4)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(3,4) scores on log sulfate (SO4) Concentration")
-P2<-ggplot(data =US_DATA_w_scores,aes(x = PC3, y = PC4)) +
-	geom_point(mapping = aes(color = log(NO3)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(3,4) scores on log nitrate (NO3) Concentration")
+P3<-ggplot(data =US_DATA_w_scores,aes(x = PC3, y = PC4)) +
+	geom_point(mapping = aes(color = log(SO4)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(3,4) scores: log sulfate (SO4)")
 
-grid.arrange(P1,P2,nrow=1)
+P4<-ggplot(data =US_DATA_w_scores,aes(x = PC3, y = PC4)) +
+	geom_point(mapping = aes(color = log(NO3)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(3,4) scores on log nitrate (NO3)")
+
+# --- IMPROVE Soil equation ---
+# --- Attests to the general validity of the soil equation ---
+# SOIL Eqn = 2.20*Al + 2.49*Si + 1.63*Ca + 2.42*Fe + 1.94*Ti
+
+P5<-ggplot(data =US_DATA_w_scores,aes(x = PC3, y = PC4)) +
+	geom_point(mapping = aes(color = log(2.2*AL+2.49*SI+1.63*CA+2.42*FE+1.94*TI)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(3,4) scores: log Soil (Si)")
+
+## --- Not the most efficient but whatevs ---
+ind_grp <- US_DATA_w_scores %>% group_by(SiteCode) %>% group_indices
+US_META_Slim<-US_META %>% filter(Code %in% US_DATA_w_scores$SiteCode)
+EW<-rep(NA,length(US_DATA_w_scores$SiteCode))
+for(k in 1:length(unique(US_DATA_w_scores$SiteCode))){
+    EW[ind_grp==k]<-US_META_Slim$WE_US[k]
+}
+US_DATA_w_scores<-add_column(US_DATA_w_scores,EW_indicator=EW)
+## --- East-West binary color coding ---
+# --- Nopt informative
+P6<-ggplot(data =US_DATA_w_scores,aes(x = PC3, y = PC4)) +
+	geom_point(mapping = aes(color = EW))+
+  theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+
+  ggtitle("PC(3,4) scores: East-West divide")
+
+grid.arrange(P3,P4,P5,nrow=1)
+
 ```
 
-### --- Step 3: PCA and US maps with the spatial toolbox ---
+```{r, "PC(5,6) Score plots colored based on high loadings"}
+# --- Total carbon: TC = OC + EC---
+P6<-ggplot(data =US_DATA_w_scores,aes(x = PC5, y = PC6)) +
+	geom_point(mapping = aes(color = log(OC+EC)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(5,6) scores: log Carbon (OC+EC)")
+# --- Pyrolyzed OC (=OP) ---
+P7<-ggplot(data =US_DATA_w_scores,aes(x = PC5, y = PC6)) +
+	geom_point(mapping = aes(color = log(OP)))+theme(plot.title = element_text(hjust = 0.5,size=7),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(5,6) scores: log pyrolyzed OC (=OP)")
+# --- IMPROVE Eqn for Marine Aerosol: 1.8*Cl
+
+P8<-ggplot(data =US_DATA_w_scores,aes(x = PC5, y = PC6)) +
+	geom_point(mapping = aes(color = log(1.8*CL)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(5,6) scores: log Sea Salt")
+
+grid.arrange(P6,P7,P8,nrow=1)
+```
+
+### --- Step 3: Gaussian Mixture Models: clustering on components ---
+
+```{r, "Part 4: first trial of mclustBIC",cache=TRUE}
+# --- Step 1: Number of PCs to consider ---
+num_PCs<-4
+num_clust<-40
+# --- Step 2: Select scores from US_DATA_scores structure ---
+GMM_scores<-US_DATA_w_scores %>% dplyr::select(num_range(prefix="PC",range=1:num_PCs))
+
+# --- Step 3: GMM mixture model ---
+GMM_BIC<-mclustBIC(GMM_scores,G=1:num_clust)
+
+## save this!
+```
+
+```{r, "Step 4: Diagnostic plots for GMM"}
+
+plot(GMM_BIC)
+
+```
 
 ```{r}
+summary(GMM_BIC)
+```
+
+
+### --- Step 3: PCA and US maps with the spatial toolbox (on hold) ---
+
+```{r}
+# Things to try tomorrow: need to understand spatial objects from raster,sf, or sp class
+# All else is just details
+
+# --- Also attach state, Lat, and lon data to main data frame ---
+
+# --- Maybe also consider CV recons
+
+```
+
+
+
+
+```{r, "Let's see what tmap package has to offer"}
+data("World")
+
+tm_shape(World) +
+    tm_polygons("HPI")
+```
+
+```{r}
+US_DATA_sf<- st_as_sf(US_DATA_LR, coords)
+
+
 dsp <- SpatialPoints(META_DATA[,c("Longitude","Latitude")], proj4string=CRS("+proj=longlat +datum=NAD83"))
 dsp <- SpatialPointsDataFrame(dsp, META_DATA)
-US <- META_DATA$County
+US <- META_DATA$County #I think I need polygon info to make US map
 # define groups for mapping
 cuts <- c(0,200,300,500,1000,3000)
 # set up a palette of interpolated colors
 blues <- colorRampPalette(c('yellow', 'orange', 'blue', 'dark blue'))
 pols <- list("sp.polygons", US, fill = "lightgray")
-spplot(dsp, "Elevation", cuts=cuts, col.regions=blues(5), sp.layout=pols, pch=20, cex=0.5)
+spplot(dsp, "Elevation", cuts=cuts, col.regions=blues(5), pch=20, cex=0.5)
 ```
 
 
-
-
-```{r, "Part 4: first trial of mclustBIC"}
-GMM_BIC<-mclustBIC(US_DATA_LRG_PM_norm,G=1:10)
-
-
-```
