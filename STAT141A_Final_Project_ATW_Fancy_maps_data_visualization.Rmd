@@ -13,11 +13,25 @@ library(gridExtra)
 library(MASS)
 library(Hmisc)
 library(corrplot)
-library(eivtools)
-library(ggbiplot)
+library(ggfortify)
 library(boot)
 library(mclust)
+library(PCAtools)
+library(RColorBrewer)
+library(spatial)
+library(raster)
+library(sp)
 ```
+
+### --- Step 0: Packages to mess with --
+
+```{r, eval=FALSE}
+    if (!requireNamespace('BiocManager', quietly = TRUE))
+        install.packages('BiocManager')
+
+    BiocManager::install('PCAtools')
+```
+
 
 ### --- Step 1: Data loading and procressing ---
 
@@ -64,12 +78,114 @@ US_DATA_LRG_test<-US_DATA_LRG[ind_test,]
 US_DATA_LRG<-US_DATA_LRG[-ind_test,]
 ```
 
-### --- Step 2: mclust for GMMs ---
+### --- Step 2: Descriptive prior to GMM ---
 
-```{r}
-## --- Normalize US data by PM2.5 conc --
-US_DATA_LRG_PM_norm<-US_DATA_LRG %>% dplyr::select(everything()/"PM2.5")
-#rename_with()
-
+```{r, "Part 1: The usual descriptives", warning=FALSE,message=FALSE,fig.cap="Figure (2.1) A2.2a: Aide-by-side Boxplots for fAbs and EC"}
+# --- Plot of abs and EC ---
+ggplot(US_DATA_LRG,aes(x=SiteCode,y=PM2.5,color=SiteCode))+
+  geom_boxplot()+
+  theme(plot.title=element_text(hjust = 0.5))+
+  scale_y_log10(limits=c(0.001,100))+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
 ```
 
+```{r, "Part 3: Correlation plot"}
+R<-cor(US_DATA_LRG %>% dplyr::select(!all_of(c("SiteCode","Date","PM2.5_UNC"))))
+corrplot(R,order="hclust")
+```
+
+### --- Step 2: Data prep for GMMs with mclust ---
+
+```{r, Part 1: Normalization}
+## --- Normalize US data by PM2.5 conc --
+US_DATA_LRG_PM_norm<-US_DATA_LRG %>% dplyr::select(everything()/"PM2.5" & !contains("PM"))
+```
+
+```{r, "Check data integrity"}
+any(is.na(US_DATA_LRG_PM_norm))
+```
+
+```{r, "Principal Component Analysis pretreatment"}
+## --- Need to preprocess with PCA as these data are too large (and EM alg. will probs. lead to non-convergance for high cluster #---
+## ----
+US_PCA_DATA_slim<-as_tibble(dplyr::select(US_DATA_LRG_PM_norm,!contains(c("SiteCode","Date"))))
+### --- log transform ---
+
+##Go through each row and determine if a value is zero
+#row_sub = apply(US_PCA_DATA_slim, 1, function(row) all(row > 0))
+#log_US_PCA_DATA_slim<-log(US_PCA_DATA_slim[row_sub,])
+
+##Subset as usual
+#log_US_PCA_DATA_slim<-log_US_PCA_DATA_slim[row_sub,]
+
+### --- PCA with PCAtools package ---
+# Damn! It does a transposed form of PCA bleh ---
+US_PCA<-pca(US_PCA_DATA_slim,transposed = TRUE)
+
+  PCAtools::screeplot(US_PCA,
+    components = getComponents(US_PCA, 1:10))+ggtitle("Explained Variance plot (negative <1%))")
+
+## --- Extract scores ---
+scores<-as_tibble(US_PCA$rotated)
+#names(scores)[31] <- "SiteCode"
+## --- Extract scores and add to main data frame ---
+US_DATA_w_scores<-add_column(US_DATA_LRG,scores)
+## --- Extract loadings (format as tibble)---
+loadings<-as_tibble(US_PCA$loadings,rownames="species")
+loadings
+```
+
+```{r, "Loading plots against species"}
+ggplot(data = loadings, mapping=aes(x=species,y=PC1,color=PC1))+geom_point()+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Organic Carbon Component")+theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(data = loadings, mapping=aes(x=species,y=PC2,color=PC2))+geom_point()+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Anion composition component")+theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(data = loadings, mapping=aes(x=species,y=PC3,color=PC3))+geom_point()+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Contrast between NO3 and SO4")+theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(data = loadings, mapping=aes(x=species,y=PC4,color=PC4))+geom_point()+
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Soil Composition Component")+theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r, "PC(1,2) Score plots colored based on high loadings"}
+P1<-ggplot(data =US_DATA_w_scores,aes(x = PC1, y = PC2)) +
+	geom_point(mapping = aes(color = log(SO4+NO3)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(1,2) scores: on log anion (NO3+SO4) Concentration")
+P2<-ggplot(data =US_DATA_w_scores,aes(x = PC1, y = PC2)) +
+	geom_point(mapping = aes(color = log(OC)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(1,2) scores on Organic Carbon log OC Concentration")
+
+grid.arrange(P1,P2,nrow=1)
+```
+
+```{r, "PC(3,4) Score plots colored based on high loadings"}
+P1<-ggplot(data =US_DATA_w_scores,aes(x = PC3, y = PC4)) +
+	geom_point(mapping = aes(color = log(SO4)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(3,4) scores on log sulfate (SO4) Concentration")
+P2<-ggplot(data =US_DATA_w_scores,aes(x = PC3, y = PC4)) +
+	geom_point(mapping = aes(color = log(NO3)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(3,4) scores on log nitrate (NO3) Concentration")
+
+grid.arrange(P1,P2,nrow=1)
+```
+
+### --- Step 3: PCA and US maps with the spatial toolbox ---
+
+```{r}
+dsp <- SpatialPoints(META_DATA[,c("Longitude","Latitude")], proj4string=CRS("+proj=longlat +datum=NAD83"))
+dsp <- SpatialPointsDataFrame(dsp, META_DATA)
+US <- META_DATA$County
+# define groups for mapping
+cuts <- c(0,200,300,500,1000,3000)
+# set up a palette of interpolated colors
+blues <- colorRampPalette(c('yellow', 'orange', 'blue', 'dark blue'))
+pols <- list("sp.polygons", US, fill = "lightgray")
+spplot(dsp, "Elevation", cuts=cuts, col.regions=blues(5), sp.layout=pols, pch=20, cex=0.5)
+```
+
+
+
+
+```{r, "Part 4: first trial of mclustBIC"}
+GMM_BIC<-mclustBIC(US_DATA_LRG_PM_norm,G=1:10)
+
+
+```
