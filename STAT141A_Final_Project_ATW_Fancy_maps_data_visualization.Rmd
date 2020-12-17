@@ -243,27 +243,35 @@ grid.arrange(P6,P7,P8,nrow=1)
 
 ### --- Step 3: Gaussian Mixture Models: clustering on components ---
 
-```{r, "Part 4: first trial of mclustBIC",cache=TRUE}
+```{r, "Part 4: first trial of mclustBIC"}
 # --- Step 1: Number of PCs to consider ---
 num_PCs<-4
-num_clust<-40
+num_clust<-10 #Interest of simplicity
 # --- Step 2: Select scores from US_DATA_scores structure ---
 GMM_scores<-US_DATA_w_scores %>% dplyr::select(num_range(prefix="PC",range=1:num_PCs))
 
 # --- Step 3: GMM mixture model ---
 GMM_BIC<-mclustBIC(GMM_scores,G=1:num_clust)
+#load("GMM_BIC.RData")
 
-## save this!
 ```
 
 ```{r, "Step 4: Diagnostic plots for GMM"}
-
+save("GMM_BIC",file="GMM_BIC_40_Clusters.RData")
 plot(GMM_BIC)
 
 ```
 
-```{r}
+```{r, SUmmary of best models}
 summary(GMM_BIC)
+```
+```{r}
+BIC_best <- Mclust(GMM_scores, x = GMM_BIC)
+summary(BIC_best, parameters = TRUE)
+```
+
+```{r, Warning=FALSE}
+plot(BIC_best, what = "classification")
 ```
 
 
