@@ -8,6 +8,7 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 # --- Data processing and viz ---
+library(latex2exp)
 library(tidyverse)
 library(broom)
 library(gridExtra)
@@ -95,7 +96,7 @@ ggplot(US_DATA_LRG,aes(x=SiteCode,y=PM2.5,color=SiteCode))+
   geom_boxplot()+
   theme(plot.title=element_text(hjust = 0.5))+
   scale_y_log10(limits=c(0.001,100))+
-  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=4))
 ```
 
 ```{r, "Part 3: Correlation plot"}
@@ -107,17 +108,32 @@ corrplot(R,order="hclust")
 
 ```{r, Part 1: Normalization}
 ## --- Normalize US data by PM2.5 conc --
-US_DATA_LRG_PM_norm<-US_DATA_LRG %>% dplyr::select(everything()/"PM2.5" & !contains("PM"))
+US_DATA_LRG_PM_norm<-US_DATA_LRG %>% dplyr::select(!c(PM2.5_UNC,SiteCode,Date)) %>% mutate(across(everything()),./ PM2.5) 
+## --- Save factor to merge back into DF ---
+US_DATA_LRG_factors<-US_DATA_LRG %>% dplyr::select(c(PM2.5_UNC,SiteCode,Date))
+  
+## --- Do the same for the test set ---
+US_DATA_LRG_PM_norm_test<-US_DATA_LRG_test %>%
+dplyr::select(!c(PM2.5_UNC,SiteCode,Date)) %>% mutate(across(everything()),./ PM2.5) 
+US_DATA_LRG_test_factors<-
+## --- Save factor to merge back into DF ---
+US_DATA_LRG_test_factors<-US_DATA_LRG_test %>% dplyr::select(c(PM2.5_UNC,SiteCode,Date))
+
+## --- FInal output (I'm sure there's a cleaner way to do this) ---
+US_DATA_LRG_PM_norm_test<-merge(US_DATA_LRG_test_factors,US_DATA_LRG_PM_norm_test)
+
 ```
 
 ```{r, "Check data integrity"}
 any(is.na(US_DATA_LRG_PM_norm))
+any(is.na(US_DATA_LRG_PM_norm_test))
 ```
 
-```{r, "Principal Component Analysis pretreatment"}
+```{r, "Principal Component Analysis pretreatment",warning=FALSE}
 ## --- Need to preprocess with PCA as these data are too large (and EM alg. will probs. lead to non-convergance for high cluster #---
 ## ----
 US_PCA_DATA_slim<-as_tibble(dplyr::select(US_DATA_LRG_PM_norm,!contains(c("SiteCode","Date"))))
+US_PCA_DATA_slim_test<-as_tibble(dplyr::select(US_DATA_LRG_PM_norm_test,!contains(c("SiteCode","Date"))))
 ### --- log transform ---
 
 ##Go through each row and determine if a value is zero
@@ -154,7 +170,19 @@ US_DATA_w_scores<-add_column(US_DATA_LRG,scores)
 ## --- Extract loadings (format as tibble)---
 loadings<-as_tibble(US_PCA$loadings,rownames="species")
 loadings
+```
 
+```{r}
+## --- Project test samples onto principal components ---
+## --- Reformat for use with predict.prcomp
+  US_PCA.prcomp <- list(sdev = US_PCA$sdev,
+    rotation = data.matrix(US_PCA$loadings),
+    x = data.matrix(US_PCA$rotated),
+    center = TRUE, scale = FALSE)
+
+  class(US_PCA.prcomp) <- 'prcomp'
+## -- Estimate test set scores ---
+scores_test<-as_tibble(predict(US_PCA.prcomp, newdata = US_PCA_DATA_slim_test))
 ```
 
 ```{r, "PC Loading plots against species"}
@@ -243,21 +271,50 @@ grid.arrange(P6,P7,P8,nrow=1)
 
 ### --- Step 3: Gaussian Mixture Models: clustering on components ---
 
-```{r, "Part 4: first trial of mclustBIC"}
-# --- Step 1: Number of PCs to consider ---
-num_PCs<-4
+```{r}
+# --- Step 3.1: Number of PCs to consider ---
+num_PCs<-6
 num_clust<-10 #Interest of simplicity
 # --- Step 2: Select scores from US_DATA_scores structure ---
 GMM_scores<-US_DATA_w_scores %>% dplyr::select(num_range(prefix="PC",range=1:num_PCs))
+```
 
-# --- Step 3: GMM mixture model ---
-GMM_BIC<-mclustBIC(GMM_scores,G=1:num_clust)
-#load("GMM_BIC.RData")
+```{r}
+# --- Step 3.1: GMM mixture model initialization with k-means---
+k_clust=100
+kmeans_partition<-kmeans(GMM_scores, k_clust, iter.max = 100, nstart = 1)
+
+# --- Step 3.2: Further Initialization with HCA ---
+hc_out<-hc(GMM_scores,partition = kmeans_partition$cluster,minclus=1,hcUse="VARS")
+#--- Don't quite see how to use this yet... This is a bit buggy
+
+# --- Step 3.3: Option to specify noise... That's interesting
+# --- We have uncertainties for PM2.5: therefore we can estimate noise as samples < minum detection limit where MDL ~= 3*min(UNC)
+PM_noise<-which(US_DATA_LRG$PM2.5 <3*min(US_DATA_LRG$PM2.5_UNC))
+# --- PErhaps we can make a good signal-to-noise ratio argument ---
+SNR<-US_DATA_LRG %>% dplyr::select(PM2.5,PM2.5_UNC,SiteCode,Date)%>% mutate(SNR_PM = PM2.5/PM2.5_UNC,Date =as.Date(Date,"%m/%d/%Y")) 
+
+SNR_sort<-arrange(SNR,Date)
+
+qplot(x=as.factor(Date),y=SNR_PM,data=SNR_sort,geom="boxplot",
+  main = "Signal-to-noise ratio: PM2.5",xlab="Date",ylab="SNR")+theme(plot.title=element_text(hjust = 0.5))+ geom_smooth(method= "loess",span=0.1 ,se=FALSE, aes(group=1))+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+PM_noise<-which(SNR$SNR_PM <quantile(SNR$SNR_PM,0.05) | SNR$SNR_PM > quantile(SNR$SNR_PM,0.95))
 
 ```
 
+```{r}
+# --- Step 3.4: Run GMM with initial paramters ---
+init_list<-list(hcPairs=NULL,noise=PM_noise)
+# --- It'd be nice if I could use noise to 
+GMM_BIC<-mclustBIC(GMM_scores,G=1:num_clust,initialization = init_list)
+
+#load("GMM_BIC.RData")
+save("GMM_BIC",file="GMM_BIC_10_clust_init_SNR.RData")
+```
+
 ```{r, "Step 4: Diagnostic plots for GMM"}
-save("GMM_BIC",file="GMM_BIC_40_Clusters.RData")
+
 plot(GMM_BIC)
 
 ```
@@ -265,6 +322,7 @@ plot(GMM_BIC)
 ```{r, SUmmary of best models}
 summary(GMM_BIC)
 ```
+
 ```{r}
 BIC_best <- Mclust(GMM_scores, x = GMM_BIC)
 summary(BIC_best, parameters = TRUE)
@@ -272,6 +330,62 @@ summary(BIC_best, parameters = TRUE)
 
 ```{r, Warning=FALSE}
 plot(BIC_best, what = "classification")
+```
+
+```{r}
+mod1dr<- MclustDR(BIC_best,lambda=1)
+plot(mod1dr, what = "boundaries",ngrid=200)
+```
+
+
+```{r}
+# --- Fit base-case weighted LS model ---
+
+w_ii<-1/US_DATA_LRG$PM2.5_UNC^2
+test_fit<-lm(PM2.5~OC+EC+OP+NO3+SO4,data=US_DATA_LRG,weights=w_ii)
+
+plot(test_fit)
+
+## --- Predict ---
+PM2.5_test<-predict.lm(test_fit,US_DATA_LRG_test)
+
+e_ii<-US_DATA_LRG_test$PM2.5-PM2.5_test
+e_scaled<-e_ii/US_DATA_LRG_test$PM2.5_UNC
+
+## --- Structure for further analysis ---
+US_DATA_test_errors1<-US_DATA_LRG_test %>% dplyr::select(SiteCode,Date,PM2.5,PM2.5_UNC) %>% mutate(Date =as.Date(Date,"%m/%d/%y"), e_test=e_ii,e_scaled=e_ii/PM2.5_UNC)
+
+## --- Classify test samplse with GMM ---
+GMM_class_test<-predict.Mclust(BIC_best,scores_test[,1:num_PCs])
+
+US_DATA_test_errors<-add_column(US_DATA_test_errors1,GMM_class=GMM_class_test$classification)
+```
+
+```{r}
+## --- Errors by date ---
+ggplot(data=US_DATA_test_errors,aes(x=Date,y=e_scaled))+ geom_boxplot(aes(group=Date))+
+  theme(plot.title=element_text(hjust = 0.5))+geom_smooth(method= "loess",span=0.05 ,se=FALSE, aes(group=1))+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ylab(TeX("$\\frac{e_{i}}{\\sigma_{i}}$"))+ggtitle("Normalized errors by date")
+
+## --- Errors by cluster ---
+ggplot(data=US_DATA_test_errors %>% filter(GMM_class!=0),aes(x=as.factor(GMM_class),y=e_scaled))+ geom_boxplot(aes(group=GMM_class))+
+  theme(plot.title=element_text(hjust = 0.5))+ylab(TeX("$\\frac{e_{i}}{\\sigma_{i}}$"))+ggtitle("Normalized errors by GMM cluster")+xlab("Cluster ID")
+## --- Cluster statistics ---
+#US_DATA_LRG_w_err<-add_column(e_scaled=e_scaled,US_DATA_LRG_PM_norm_test,.before="SiteCode")
+
+US_DATA_test_w_stack<-stack(dplyr::select(US_DATA_LRG_PM_norm_test,!c("SiteCode","Date")))
+
+US_DATA_test_stack_GMM<-add_column(US_DATA_test_w_stack,GMM_ID =rep(GMM_class_test$classification,length(levels(US_DATA_test_w_stack$ind))))
+
+## --- Let's look only at the clusters that show high error ---
+med_all_site<-apply(US_DATA_LRG_PM_norm_test[-c(1,2)],2,median)
+med_sites<-tibble(species=names(med_all_site),medians=med_all_site)
+
+ggplot(US_DATA_test_stack_GMM %>% dplyr::filter(GMM_ID == c(5)), aes(x = reorder(ind,values,FUN=median,na.rm=TRUE), y = values)) +
+  geom_boxplot()+geom_line(data=med_sites,aes(x=species,y=medians,group=1))+ylab("Mass fraction")+xlab("Species")
+  #+ geom_smooth(data=US_DATA_test_stack_err_GMM,method= "loess",span=0.1 ,se=FALSE, aes(group=1))
+```
+
+```{r}
 ```
 
 
