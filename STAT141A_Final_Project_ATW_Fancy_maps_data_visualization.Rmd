@@ -106,21 +106,28 @@ corrplot(R,order="hclust")
 
 ### --- Step 2: Data prep for GMMs with mclust ---
 
-```{r, Part 1: Normalization}
+```{r, Part 1: Normalization-- Decided to nullify in the 11th hour}
 ## --- Normalize US data by PM2.5 conc --
-US_DATA_LRG_PM_norm<-US_DATA_LRG %>% dplyr::select(!c(PM2.5_UNC,SiteCode,Date)) %>% mutate(across(everything()),./ PM2.5) 
+US_DATA_LRG_PM_norm<-US_DATA_LRG %>% dplyr::select(!c(PM2.5_UNC,SiteCode,Date,PM2.5)) %>% mutate(across(everything()),./ 1) 
 ## --- Save factor to merge back into DF ---
-US_DATA_LRG_factors<-US_DATA_LRG %>% dplyr::select(c(PM2.5_UNC,SiteCode,Date))
+US_DATA_LRG_factors<-US_DATA_LRG %>% dplyr::select(c(SiteCode,Date,PM2.5_UNC))
   
 ## --- Do the same for the test set ---
 US_DATA_LRG_PM_norm_test<-US_DATA_LRG_test %>%
-dplyr::select(!c(PM2.5_UNC,SiteCode,Date)) %>% mutate(across(everything()),./ PM2.5) 
-US_DATA_LRG_test_factors<-
+dplyr::select(!c(SiteCode,Date,PM2.5_UNC,PM2.5)) %>% transmute(across(everything()),./ 1) 
+
 ## --- Save factor to merge back into DF ---
-US_DATA_LRG_test_factors<-US_DATA_LRG_test %>% dplyr::select(c(PM2.5_UNC,SiteCode,Date))
+US_DATA_LRG_test_factors<-US_DATA_LRG_test %>% dplyr::select(c(SiteCode,Date,PM2.5_UNC))
 
 ## --- FInal output (I'm sure there's a cleaner way to do this) ---
-US_DATA_LRG_PM_norm_test<-merge(US_DATA_LRG_test_factors,US_DATA_LRG_PM_norm_test)
+US_DATA_LRG_PM_norm1<-bind_cols(US_DATA_LRG_factors,US_DATA_LRG_PM_norm)
+US_DATA_LRG_PM_norm_test1<-bind_cols(US_DATA_LRG_test_factors,US_DATA_LRG_PM_norm_test)
+
+## --- Remove bad division by PM2.5 ---
+logic_complete<-complete.cases(US_DATA_LRG_PM_norm1)
+logic_complete_test<-complete.cases(US_DATA_LRG_PM_norm_test1)
+US_DATA_LRG_PM_norm<-US_DATA_LRG_PM_norm1[complete.cases(US_DATA_LRG_PM_norm1),]
+US_DATA_LRG_PM_norm_test<-US_DATA_LRG_PM_norm_test1[complete.cases(US_DATA_LRG_PM_norm_test1),]
 
 ```
 
@@ -132,8 +139,8 @@ any(is.na(US_DATA_LRG_PM_norm_test))
 ```{r, "Principal Component Analysis pretreatment",warning=FALSE}
 ## --- Need to preprocess with PCA as these data are too large (and EM alg. will probs. lead to non-convergance for high cluster #---
 ## ----
-US_PCA_DATA_slim<-as_tibble(dplyr::select(US_DATA_LRG_PM_norm,!contains(c("SiteCode","Date"))))
-US_PCA_DATA_slim_test<-as_tibble(dplyr::select(US_DATA_LRG_PM_norm_test,!contains(c("SiteCode","Date"))))
+US_PCA_DATA_slim<-as_tibble(dplyr::select(US_DATA_LRG_PM_norm,!contains(c("SiteCode","Date","PM2.5","PM2.5_UNC"))))
+US_PCA_DATA_slim_test<-as_tibble(dplyr::select(US_DATA_LRG_PM_norm_test,!contains(c("SiteCode","Date","PM2.5","PM2.5_UNC"))))
 ### --- log transform ---
 
 ##Go through each row and determine if a value is zero
@@ -166,7 +173,7 @@ horn$n
 scores<-as_tibble(US_PCA$rotated)
 #names(scores)[31] <- "SiteCode"
 ## --- Extract scores and add to main data frame ---
-US_DATA_w_scores<-add_column(US_DATA_LRG,scores)
+US_DATA_w_scores<-add_column(US_DATA_LRG[logic_complete,],scores)
 ## --- Extract loadings (format as tibble)---
 loadings<-as_tibble(US_PCA$loadings,rownames="species")
 loadings
@@ -192,7 +199,7 @@ ggplot(data = loadings, mapping=aes(x=species,y=PC1,color=PC1))+geom_point()+
 
 ## --- PC2 ---
 ggplot(data = loadings, mapping=aes(x=species,y=PC2,color=PC2))+geom_point()+
-  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Anion composition component")+theme(plot.title = element_text(hjust = 0.5))
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Total Anion component (NO3+SO4)")+theme(plot.title = element_text(hjust = 0.5))
 
 ## --- PC3 ---
 ggplot(data = loadings, mapping=aes(x=species,y=PC3,color=PC3))+geom_point()+
@@ -200,22 +207,22 @@ ggplot(data = loadings, mapping=aes(x=species,y=PC3,color=PC3))+geom_point()+
 
 ## --- PC4 ---
 ggplot(data = loadings, mapping=aes(x=species,y=PC4,color=PC4))+geom_point()+
-  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Soil Composition Component")+theme(plot.title = element_text(hjust = 0.5))
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Soil (Al,Ca,Fe,Si)")+theme(plot.title = element_text(hjust = 0.5))
 
 ## --- PC5 ---
 ggplot(data = loadings, mapping=aes(x=species,y=PC5,color=PC5))+geom_point()+
-  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Total Carbon (OC,EC) + OP adjustment + Marginal Marine Contribution")+theme(plot.title = element_text(hjust = 0.5))
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Mixed/Ambiguous")+theme(plot.title = element_text(hjust = 0.5))
 
 ## --- PC6 ---
 ggplot(data = loadings, mapping=aes(x=species,y=PC6,color=PC6))+geom_point()+
-  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Marine Aerosol (Na,Cl,Mg) + Marginal EC Contribution")+theme(plot.title = element_text(hjust = 0.5))
+  theme(legend.position = "none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ggtitle("Marine Aerosol (Na,Cl; -) with marginal EC contrast (+)")+theme(plot.title = element_text(hjust = 0.5))
 
 ```
 
 ```{r, "PC(1,2) Score plots colored based on high loadings"}
-P1<-ggplot(data =US_DATA_w_scores,aes(x = PC1, y = PC2)) +
-	geom_point(mapping = aes(color = log(SO4+NO3)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(1,2) scores: log Anions (NO3+SO4)")
 P2<-ggplot(data =US_DATA_w_scores,aes(x = PC1, y = PC2)) +
+	geom_point(mapping = aes(color = log(SO4+NO3)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(1,2) scores: log Anions (NO3+SO4)")
+P1<-ggplot(data =US_DATA_w_scores,aes(x = PC1, y = PC2)) +
 	geom_point(mapping = aes(color = log(OC)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(1,2) scores: log Organic Carbon (OC)")
 
 grid.arrange(P1,P2,nrow=1)
@@ -266,7 +273,7 @@ P7<-ggplot(data =US_DATA_w_scores,aes(x = PC5, y = PC6)) +
 P8<-ggplot(data =US_DATA_w_scores,aes(x = PC5, y = PC6)) +
 	geom_point(mapping = aes(color = log(1.8*CL)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(5,6) scores: log Sea Salt")
 
-grid.arrange(P6,P7,P8,nrow=1)
+grid.arrange(P7,P8,nrow=1)
 ```
 
 ### --- Step 3: Gaussian Mixture Models: clustering on components ---
@@ -307,16 +314,14 @@ PM_noise<-which(SNR$SNR_PM <quantile(SNR$SNR_PM,0.05) | SNR$SNR_PM > quantile(SN
 # --- Step 3.4: Run GMM with initial paramters ---
 init_list<-list(hcPairs=NULL,noise=PM_noise)
 # --- It'd be nice if I could use noise to 
-GMM_BIC<-mclustBIC(GMM_scores,G=1:num_clust,initialization = init_list)
+#GMM_BIC<-mclustBIC(GMM_scores,G=1:num_clust,initialization = init_list)
 
-#load("GMM_BIC.RData")
-save("GMM_BIC",file="GMM_BIC_10_clust_init_SNR.RData")
+load("GMM_BIC_10_clust_init_SNR.RData")
+#save("GMM_BIC",file="GMM_BIC_10_clust_init_SNR.RData")
 ```
 
 ```{r, "Step 4: Diagnostic plots for GMM"}
-
 plot(GMM_BIC)
-
 ```
 
 ```{r, SUmmary of best models}
@@ -336,7 +341,6 @@ plot(BIC_best, what = "classification")
 mod1dr<- MclustDR(BIC_best,lambda=1)
 plot(mod1dr, what = "boundaries",ngrid=200)
 ```
-
 
 ```{r}
 # --- Fit base-case weighted LS model ---
@@ -369,6 +373,7 @@ ggplot(data=US_DATA_test_errors,aes(x=Date,y=e_scaled))+ geom_boxplot(aes(group=
 ## --- Errors by cluster ---
 ggplot(data=US_DATA_test_errors %>% filter(GMM_class!=0),aes(x=as.factor(GMM_class),y=e_scaled))+ geom_boxplot(aes(group=GMM_class))+
   theme(plot.title=element_text(hjust = 0.5))+ylab(TeX("$\\frac{e_{i}}{\\sigma_{i}}$"))+ggtitle("Normalized errors by GMM cluster")+xlab("Cluster ID")
+
 ## --- Cluster statistics ---
 #US_DATA_LRG_w_err<-add_column(e_scaled=e_scaled,US_DATA_LRG_PM_norm_test,.before="SiteCode")
 
@@ -380,8 +385,9 @@ US_DATA_test_stack_GMM<-add_column(US_DATA_test_w_stack,GMM_ID =rep(GMM_class_te
 med_all_site<-apply(US_DATA_LRG_PM_norm_test[-c(1,2)],2,median)
 med_sites<-tibble(species=names(med_all_site),medians=med_all_site)
 
-ggplot(US_DATA_test_stack_GMM %>% dplyr::filter(GMM_ID == c(5)), aes(x = reorder(ind,values,FUN=median,na.rm=TRUE), y = values)) +
-  geom_boxplot()+geom_line(data=med_sites,aes(x=species,y=medians,group=1))+ylab("Mass fraction")+xlab("Species")
+ggplot(US_DATA_test_stack_GMM %>% dplyr::filter(GMM_ID == c(10)), aes(x = reorder(ind,values,FUN=median,na.rm=TRUE), y = values)) +
+  geom_boxplot()+geom_line(data=med_sites,aes(x=species,y=medians,group=1))+
+  theme(plot.title=element_text(hjust = 0.5),axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=4))+ylab("Concentration")+xlab("Species")
   #+ geom_smooth(data=US_DATA_test_stack_err_GMM,method= "loess",span=0.1 ,se=FALSE, aes(group=1))
 ```
 
