@@ -14,6 +14,7 @@ library(broom)
 library(gridExtra)
 library(RColorBrewer)
 # --- Stats---
+library(ggcorrplot)
 library(corrplot)
 library(boot)
 library(mclust)
@@ -108,13 +109,13 @@ corrplot(R,order="hclust")
 
 ```{r, Part 1: Normalization-- Decided not to normalize for PCA}
 ## --- Normalize US data by PM2.5 conc --
-US_DATA_LRG_PM_norm<-US_DATA_LRG %>% dplyr::select(!c(PM2.5_UNC,SiteCode,Date,PM2.5)) %>% mutate(across(everything()),./ 1) 
+US_DATA_LRG_PM_norm<-US_DATA_LRG %>% dplyr::select(!c(PM2.5_UNC,SiteCode,Date)) %>% mutate(across(everything()),./ PM2.5) 
 ## --- Save factor to merge back into DF ---
 US_DATA_LRG_factors<-US_DATA_LRG %>% dplyr::select(c(SiteCode,Date,PM2.5_UNC))
   
 ## --- Do the same for the test set ---
 US_DATA_LRG_PM_norm_test<-US_DATA_LRG_test %>%
-dplyr::select(!c(SiteCode,Date,PM2.5_UNC,PM2.5)) %>% transmute(across(everything()),./ 1) 
+dplyr::select(!c(SiteCode,Date,PM2.5_UNC)) %>% transmute(across(everything()),./ PM2.5) 
 
 ## --- Save factor to merge back into DF ---
 US_DATA_LRG_test_factors<-US_DATA_LRG_test %>% dplyr::select(c(SiteCode,Date,PM2.5_UNC))
@@ -139,8 +140,8 @@ any(is.na(US_DATA_LRG_PM_norm_test))
 ```{r, "Principal Component Analysis pretreatment",warning=FALSE}
 ## --- Need to preprocess with PCA as these data are too large (and EM alg. will probs. lead to non-convergance for high cluster #---
 ## ----
-US_PCA_DATA_slim<-as_tibble(dplyr::select(US_DATA_LRG_PM_norm,!contains(c("SiteCode","Date","PM2.5","PM2.5_UNC"))))
-US_PCA_DATA_slim_test<-as_tibble(dplyr::select(US_DATA_LRG_PM_norm_test,!contains(c("SiteCode","Date","PM2.5","PM2.5_UNC"))))
+US_PCA_DATA_slim<-as_tibble(dplyr::select(US_DATA_LRG,!contains(c("SiteCode","Date","PM2.5","PM2.5_UNC"))))
+US_PCA_DATA_slim_test<-as_tibble(dplyr::select(US_DATA_LRG_test,!contains(c("SiteCode","Date","PM2.5","PM2.5_UNC"))))
 ### --- log transform ---
 
 ##Go through each row and determine if a value is zero
@@ -160,6 +161,7 @@ elbow
 horn <- parallelPCA(US_PCA_DATA_slim)
 horn$n
 ```
+
 ```{r}
 ## --- Screeplot ---
   PCAtools::screeplot(US_PCA,
@@ -173,7 +175,7 @@ horn$n
 scores<-as_tibble(US_PCA$rotated)
 #names(scores)[31] <- "SiteCode"
 ## --- Extract scores and add to main data frame ---
-US_DATA_w_scores<-add_column(US_DATA_LRG[logic_complete,],scores)
+US_DATA_w_scores<-add_column(US_DATA_LRG,scores)
 ## --- Extract loadings (format as tibble)---
 loadings<-as_tibble(US_PCA$loadings,rownames="species")
 loadings
@@ -221,9 +223,9 @@ ggplot(data = loadings, mapping=aes(x=species,y=PC6,color=PC6))+geom_point()+
 
 ```{r, "PC(1,2) Score plots colored based on high loadings"}
 P2<-ggplot(data =US_DATA_w_scores,aes(x = PC1, y = PC2)) +
-	geom_point(mapping = aes(color = log(SO4+NO3)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(1,2) scores: log Anions (NO3+SO4)")
+	geom_point(mapping = aes(color = log(SO4+NO3)))+theme(plot.title = element_text(hjust = 0.5,size=10),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(1,2) scores: log Anions (NO3+SO4)")
 P1<-ggplot(data =US_DATA_w_scores,aes(x = PC1, y = PC2)) +
-	geom_point(mapping = aes(color = log(OC)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(1,2) scores: log Organic Carbon (OC)")
+	geom_point(mapping = aes(color = log(OC)))+theme(plot.title = element_text(hjust = 0.5,size=10),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(1,2) scores: log Organic Carbon (OC)")
 
 grid.arrange(P1,P2,nrow=1)
 ```
@@ -267,11 +269,11 @@ P6<-ggplot(data =US_DATA_w_scores,aes(x = PC5, y = PC6)) +
 	geom_point(mapping = aes(color = log(OC+EC)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(5,6) scores: log Carbon (OC+EC)")
 # --- Pyrolyzed OC (=OP) ---
 P7<-ggplot(data =US_DATA_w_scores,aes(x = PC5, y = PC6)) +
-	geom_point(mapping = aes(color = log(OP)))+theme(plot.title = element_text(hjust = 0.5,size=7),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(5,6) scores: log pyrolyzed OC (=OP)")
+	geom_point(mapping = aes(color = log(OP)))+theme(plot.title = element_text(hjust = 0.5,size=10),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(5,6) scores: log pyrolyzed OC (=OP)")
 # --- IMPROVE Eqn for Marine Aerosol: 1.8*Cl
 
 P8<-ggplot(data =US_DATA_w_scores,aes(x = PC5, y = PC6)) +
-	geom_point(mapping = aes(color = log(1.8*CL)))+theme(plot.title = element_text(hjust = 0.5,size=8),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(5,6) scores: log Sea Salt")
+	geom_point(mapping = aes(color = log(1.8*CL)))+theme(plot.title = element_text(hjust = 0.5,size=10),legend.position = "none")+ scale_color_gradientn(colours = rainbow(20,start=0.25,end=1))+ggtitle("PC(5,6) scores: log Sea Salt")
 
 grid.arrange(P7,P8,nrow=1)
 ```
@@ -303,9 +305,11 @@ SNR<-US_DATA_LRG %>% dplyr::select(PM2.5,PM2.5_UNC,SiteCode,Date)%>% mutate(SNR_
 
 SNR_sort<-arrange(SNR,Date)
 
-qplot(x=as.factor(Date),y=SNR_PM,data=SNR_sort,geom="boxplot",
-  main = "Signal-to-noise ratio: PM2.5",xlab="Date",ylab="SNR")+theme(plot.title=element_text(hjust = 0.5))+ geom_smooth(method= "loess",span=0.1 ,se=FALSE, aes(group=1))+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+#qplot(x=as.factor(Date),y=SNR_PM,data=SNR_sort,geom="boxplot",
+#  main = "Signal-to-noise ratio: PM2.5",xlab="Date",ylab="SNR")+theme(plot.title=element_text(hjust = 0.5))+ geom_smooth(method= "loess",span=0.1 ,se=FALSE, aes(group=1))+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
 
+
+## --- Define "noise" for GMM as sample with low SNR and inordinately high ---> separate horses from zebra's given lognormality
 PM_noise<-which(SNR$SNR_PM <quantile(SNR$SNR_PM,0.05) | SNR$SNR_PM > quantile(SNR$SNR_PM,0.95))
 
 ```
@@ -368,21 +372,19 @@ US_DATA_test_errors<-add_column(US_DATA_test_errors1,GMM_class=GMM_class_test$cl
 ```{r}
 ## --- Errors by date ---
 ggplot(data=US_DATA_test_errors,aes(x=Date,y=e_scaled))+ geom_boxplot(aes(group=Date))+
-  theme(plot.title=element_text(hjust = 0.5))+geom_smooth(method= "loess",span=0.05 ,se=FALSE, aes(group=1))+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ylab(TeX("$\\frac{e_{i}}{\\sigma_{i}}$"))+ggtitle("Normalized errors by date")
+  theme(plot.title=element_text(hjust = 0.5))+geom_smooth(method= "loess",span=0.05 ,se=FALSE, aes(group=1))+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ylab(TeX("$\\frac{e_{i}}{\\sigma_{i}}$"))+ggtitle("Normalized errors by date")+scale_x_date(breaks = "1 month", labels=scales::date_format("%b-%Y"))
 
 ## --- Errors by cluster ---
 ggplot(data=US_DATA_test_errors %>% filter(GMM_class!=0),aes(x=as.factor(GMM_class),y=e_scaled))+ geom_boxplot(aes(group=GMM_class))+
   theme(plot.title=element_text(hjust = 0.5))+ylab(TeX("$\\frac{e_{i}}{\\sigma_{i}}$"))+ggtitle("Normalized errors by GMM cluster")+xlab("Cluster ID")
 
-## --- Cluster statistics ---
-#US_DATA_LRG_w_err<-add_column(e_scaled=e_scaled,US_DATA_LRG_PM_norm_test,.before="SiteCode")
-
-US_DATA_test_w_stack<-stack(dplyr::select(US_DATA_LRG_PM_norm_test,!c("SiteCode","Date")))
+# ---Stack for boxplot of species on GMM cluster ---
+US_DATA_test_w_stack<-stack(dplyr::select(US_DATA_LRG_test,!c("SiteCode","Date","PM2.5_UNC","PM2.5")))
 
 US_DATA_test_stack_GMM<-add_column(US_DATA_test_w_stack,GMM_ID =rep(GMM_class_test$classification,length(levels(US_DATA_test_w_stack$ind))))
 
 ## --- Let's look only at the clusters that show high error ---
-med_all_site<-apply(US_DATA_LRG_PM_norm_test[-c(1,2)],2,median)
+med_all_site<-apply(dplyr::select(US_DATA_LRG_test,!c("SiteCode","Date","PM2.5_UNC","PM2.5")),2,median)
 med_sites<-tibble(species=names(med_all_site),medians=med_all_site)
 
 ggplot(US_DATA_test_stack_GMM %>% dplyr::filter(GMM_ID == c(10)), aes(x = reorder(ind,values,FUN=median,na.rm=TRUE), y = values)) +
@@ -391,46 +393,43 @@ ggplot(US_DATA_test_stack_GMM %>% dplyr::filter(GMM_ID == c(10)), aes(x = reorde
   #+ geom_smooth(data=US_DATA_test_stack_err_GMM,method= "loess",span=0.1 ,se=FALSE, aes(group=1))
 ```
 
-### --- Step 3: PCA and US maps with the spatial toolbox (on hold) ---
+### --- Step 3: Figures for the Porject report ---
+```{r, "Figure 1: PM2.5 species boxplot: predictors in regressions, corrplot",warning=FALSE}
+R<-cor(US_DATA_LRG %>% dplyr::select(!all_of(c("SiteCode","Date","PM2.5_UNC"))))
+DZA<-corrplot(R,order="hclust")
 
-```{r}
-# Things to try tomorrow: need to understand spatial objects from raster,sf, or sp class
-# All else is just details
-
-# --- Also attach state, Lat, and lon data to main data frame ---
-
-# --- Maybe also consider CV recons
-
-```
-
-### --- STep 4: Figures for the Porject report ---
-```{r, "Figure 1: PM2.5 normalized species"}
 ## --- Boxplot on normal and log scale ---
+F1A<-ggcorrplot(R,hc.order=TRUE)+theme(legend.position = "bottom")+theme(plot.title=element_text(hjust = 0.5,size=8),axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=6),axis.text.y = element_text(vjust = 0.5, hjust=1,size=6))+ggtitle("Sample Correlations: Predictors & response (=PM2.5)")
+
+## --- Species boxplots ---
+US_DATA_w_stack<-stack(dplyr::select(US_DATA_LRG,!c("SiteCode","Date","PM2.5_UNC")))
+
+F1B<-ggplot(US_DATA_w_stack, aes(x = reorder(ind,values,FUN=median,na.rm=TRUE), y = values)) +
+  geom_boxplot()+
+  theme(plot.title=element_text(hjust = 0.5,size=8),axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=6))+ylab("Mass Concentration")+xlab("Species")+scale_y_log10(labels=scales::comma)+ggtitle("Summary of predictors sans response")
+
+grid.arrange(D1A,D1B,nrow=1)
+
 
 ```
 
+```{r, "PM Mass to SNR",warning=FALSE}
+F2A<-ggplot(data=US_DATA_all,aes(x=as.Date(Date,"%m/%d/%Y"),y=PM2.5))+ geom_boxplot(aes(group=as.Date(Date,"%m/%d/%Y")),outlier.shape = NA, coef = 0)+
+  theme(plot.title=element_text(hjust = 0.5,size=10))+geom_smooth(method= "loess",span=0.05 ,se=FALSE, aes(group=1))+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+xlab("Date")+ylab(TeX("PM2.5"))+ggtitle("Daily PM2.5 Mass Concentration")+scale_x_date(breaks = "1 month", labels=scales::date_format("%b-%Y"))+ylim(0,10)
+
+F2B<-ggplot(data=SNR_sort,aes(x=Date,y=SNR_PM))+ geom_boxplot(aes(group=Date),outlier.shape = NA, coef = 0)+
+  theme(plot.title=element_text(hjust = 0.5,size=10))+geom_smooth(method= "loess",span=0.05 ,se=FALSE, aes(group=1))+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ylab(TeX("SNR"))+ggtitle("Signal-to-noise ratio: PM2.5")+scale_x_date(breaks = "1 month", labels=scales::date_format("%b-%Y"))+ylim(5,35)
+
+F2C<-ggplot(data=US_DATA_all,aes(x=as.Date(Date,"%m/%d/%Y"),y=OC))+ geom_boxplot(aes(group=as.Date(Date,"%m/%d/%Y")),outlier.shape = NA, coef = 0)+
+  theme(plot.title=element_text(hjust = 0.5,size=10))+geom_smooth(method= "loess",span=0.05 ,se=FALSE, aes(group=1))+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+xlab("Date")+ylab(TeX("OC"))+ggtitle("Daily OC Mass Concentration")+scale_x_date(breaks = "1 month", labels=scales::date_format("%b-%Y"))+ylim(0,2)
 
 
-```{r, "Let's see what tmap package has to offer"}
-data("World")
+F2D<-ggplot(data=US_DATA_all,aes(x=as.Date(Date,"%m/%d/%Y"),y=SO4))+ geom_boxplot(aes(group=as.Date(Date,"%m/%d/%Y")),outlier.shape = NA, coef = 0)+
+  theme(plot.title=element_text(hjust = 0.5,size=10))+geom_smooth(method= "loess",span=0.05 ,se=FALSE, aes(group=1))+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+xlab("Date")+ylab(TeX("SO4"))+ggtitle("Daily Sulfate (SO4) Mass Concentration")+scale_x_date(breaks = "1 month", labels=scales::date_format("%b-%Y"))+ylim(0.05,1.5)
 
-tm_shape(World) +
-    tm_polygons("HPI")
+grid.arrange(F2A,F2B,F2C,F2D,nrow=2,ncol=2)
 ```
 
-```{r}
-US_DATA_sf<- st_as_sf(US_DATA_LR, coords)
 
-
-dsp <- SpatialPoints(META_DATA[,c("Longitude","Latitude")], proj4string=CRS("+proj=longlat +datum=NAD83"))
-dsp <- SpatialPointsDataFrame(dsp, META_DATA)
-US <- META_DATA$County #I think I need polygon info to make US map
-# define groups for mapping
-cuts <- c(0,200,300,500,1000,3000)
-# set up a palette of interpolated colors
-blues <- colorRampPalette(c('yellow', 'orange', 'blue', 'dark blue'))
-pols <- list("sp.polygons", US, fill = "lightgray")
-spplot(dsp, "Elevation", cuts=cuts, col.regions=blues(5), pch=20, cex=0.5)
-```
 
 
