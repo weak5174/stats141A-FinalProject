@@ -1,0 +1,135 @@
+---
+title: "STA 141A Project (ENR)"
+author: "Seyoung Jung"
+date: "12/15/2020"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(glmnet) 
+library(tidyverse)
+library(Hmisc)
+library(tibble)
+```
+
+
+### --- Step 1: Data loading and procressing ---
+
+```{r, "Part A-C: Load and process data I"}
+## --- Part a: Upload Metadata for samples ---
+setwd("C:/Users/Martin/Desktop/Fall 2020/STA 141A")
+path_data<-file.path(getwd(),"Project")
+META_DATA<-as_tibble(read.csv(file.path(path_data,"IMPROVE_metadata.csv")))
+## --- Filter samples from Korea and Canada ---
+US_META<-META_DATA %>% filter(Country %nin% c("KR","CA"))
+## --- Filter stats not in continental US ---
+US_META<-META_DATA %>% filter(State %nin% c("HI","AK","VI"))
+## --- Part b: Load samples data ---
+DATA<-as_tibble(read.csv(file.path(path_data,"IMPROVE_2015_data_w_UNC_v2.csv")))
+## --- Part c: Select samples from SW given site identifiers from SW_META table ("Code")
+US_DATA_all<-as_tibble(DATA %>% filter(SiteCode %in% US_META$Code))
+```
+
+```{r,"Part D: Check for gross absorbance violations"}
+# Let's identify any samples that (grossly) violate PM2.5 mass balances
+# PM2.5 (=Y) cannot be negative!
+# Since there's some probability that PM2.5 is negative due to errors at low concentration, we may use PM2.5 uncertainties to remove samples that fall outside -3*PM2.5_UNC.
+# In this way, we don't risk censoring the data but do remove likely erroneous data.
+US_DATA_all<-US_DATA_all %>% dplyr::filter(PM2.5 > -3*PM2.5_UNC)
+```
+
+```{r, "Screen proxies, constructs, PM, and useless things"}
+exclude<-c("fAbs","PM10","POC","ammNO3","ammSO4","SOIL","SeaSalt","OC1","OC2","OC3","OC4","EC1","EC2","EC3","fAbs_MDL")
+US_DATA_LRG<- US_DATA_all %>% dplyr::select(!contains(exclude) & !matches("_UNC") | matches("PM2.5_UNC"))
+any(is.na(US_DATA_LRG))
+US_DATA_LRG<-US_DATA_LRG[which(complete.cases(US_DATA_LRG)),]
+any(is.na(US_DATA_LRG))
+```
+
+```{r, "Part F: Partition data into training and testing sets"}
+## --- Instead of random partitioning, I will partition by first sorting samples by SiteCode and DATE (already done) and place every other sample in the test set.
+# --- This data has seasonality. Sorting by date therefore ensures seasonality is equivalent between datasets
+n<-nrow(US_DATA_LRG)
+ind_test<-seq(1,n,2)
+US_DATA_LRG_test<-US_DATA_LRG[ind_test,]
+US_DATA_LRG<-US_DATA_LRG[-ind_test,]
+```
+
+
+
+
+
+Categorical => dummy Test
+
+Two of our predictor variables are categorical variables (SiteCode and Date). Hence, we need to convert the variables to dummy variables. Also, in order to use the cv.glmnet function to fit the Elastic Net Regression to the data, input data should be in a matrix format. Also, since the function does not accept formula notation, x and y must be passed in separately. So, we create two different sets for training set. 
+
+```{r, message=FALSE, warning=FALSE}
+US_DATA_LRG_train_y <- US_DATA_LRG$PM2.5
+x_train_cont <- US_DATA_LRG %>%
+  select(-PM2.5, -SiteCode, -Date, -PM2.5_UNC) %>%
+  as.matrix()
+x_train_cat <- US_DATA_LRG %>%
+  select(SiteCode, Date) %>%
+  model.matrix( ~ .-1, .)
+US_DATA_LRG_train_x <- cbind(x_train_cont, x_train_cat)
+
+
+US_DATA_LRG_test_y <- US_DATA_LRG_test$PM2.5
+x_test_cont <- US_DATA_LRG_test %>%
+  select(-PM2.5, -SiteCode, -Date, -PM2.5_UNC) %>%
+  as.matrix()
+x_test_cat <- US_DATA_LRG_test %>%
+  select(SiteCode, Date) %>%
+  model.matrix( ~ .-1, .)
+US_DATA_LRG_test_x <- cbind(x_test_cont, x_test_cat)
+```
+After converting the factor variables, the training set (US_DATA_LRG_train_x) will have 308 variables.
+
+
+
+Now, we will fit models to the training data. By default, the cv.glmnet uses 10-fold cross validation to find the optimal values for lambda. Also, we will use the mean squared error for our evaluation metric. When alpha is 0 (or 1), this function fits Ridge Regression (or Lasso Regression). We will try 20 different values, between 0 and 1, for alpha to find a value that gives us the best result. 
+```{r, message=FALSE, warning=FALSE}
+set.seed(141)
+
+fits_list <- list() 
+for (i in 0:20) {
+  fits_name <- paste0("Alpha_", i/20)
+  
+  fits_list[[fits_name]] <- cv.glmnet(as.matrix(US_DATA_LRG_train_x), as.matrix(US_DATA_LRG_train_y), type.measure="mse", alpha=i/20, family="gaussian")
+}
+```
+
+
+
+lambda.1se is the value for lambda, stored in each fitted model, that resulted in the simplest model (i.e. the model with the least non-zero parameters) and was within 1 standard error of the lambda that had the smallest sum. 
+```{r, message=FALSE, warning=FALSE}
+fit_result <- data.frame()
+for (i in 0:20) {
+  fits_name <- paste0("Alpha_", i/20)
+  
+  predict_val <- predict(fits_list[[fits_name]], s=fits_list[[fits_name]]$lambda.1se, newx=as.matrix(US_DATA_LRG_test_x))
+  
+  mse <- mean((as.matrix(US_DATA_LRG_test_y) - predict_val)^2)
+  
+  temp_val <- data.frame(Alpha=i/20, MSE=mse, fits_name=fits_name)
+  fit_result <- rbind(fit_result, temp_val)
+  }
+
+fit_result
+```
+
+We can see that neither Ridge Regression nor Lasso Regression gives us the best result. Although it gives us a very similar MSE values when alpha is in between 0 and 1, it has the lowest MSE when alpha=0.45. Since we are using Elastic Net Regression, we can expect that this model has less predictor variables than the full model. 
+
+
+For the model with alpha=0.45, cross validation method chooses lambda=0.074. If we take a closer look at a model with alpha=0.45, we can observe that 52 of variables are nonzero. It means that the remaining variables are dropped when fitting this model to the training set. 
+```{r, message=FALSE, warning=FALSE}
+# We can see that the mse is the lowest when alpha = 0.45. 
+fits_list$Alpha_0.45
+fits_list$Alpha_0.45$lambda.1se # value for lambda
+coef(fits_list$Alpha_0.45)      # coefficients of this model
+
+```
+
+

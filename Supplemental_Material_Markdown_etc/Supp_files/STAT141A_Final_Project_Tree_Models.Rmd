@@ -1,0 +1,254 @@
+---
+title: "STA141A-Tree Models-ATW-CMD-Markdown"
+author: "Andrew T. Weakley, Christina De Cesaris"
+date: "12/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(broom)
+library(gridExtra)
+library(MASS)
+library(Hmisc)
+library(corrplot)
+library(eivtools)
+library(ggbiplot)
+library(boot)
+library(mclust)
+
+#Additonal Libraries 
+library(rsample)     # data splitting 
+library(dplyr)       # data wrangling
+library(rpart)       # performing regression trees
+library(rpart.plot)  # plotting regression trees
+library(ipred)       # bagging
+library(caret)       # bagging
+```
+
+
+
+### --- Step 1: Data loading and procressing ---
+
+```{r, "Part A-C: Load and process data I"}
+## --- Part a: Upload Metadata for samples ---
+path_data<-file.path(getwd(),"data")
+META_DATA<-as_tibble(read.csv(file.path(path_data,"IMPROVE_metadata.csv")))
+## --- Filter samples from Korea and Canada ---
+US_META<-META_DATA %>% filter(Country %nin% c("KR","CA"))
+
+
+## --- Filter stats not in continental US ---
+US_META<-META_DATA %>% filter(State %nin% c("HI","AK","VI"))
+
+## --- Part b: Load samples data ---
+DATA<-as_tibble(read.csv(file.path(path_data,"IMPROVE_2015_data_w_UNC_v2.csv")))
+
+## --- Part c: Select samples from SW given site identifiers from SW_META table ("Code")
+US_DATA_all<-as_tibble(DATA %>% filter(SiteCode %in% US_META$Code))
+```
+
+```{r,"Part D: Check for gross absorbance violations"}
+# Let's identify any samples that (grossly) violate PM2.5 mass balances
+# PM2.5 (=Y) cannot be negative!
+# Since there's some probability that PM2.5 is negative due to errors at low concentration, we may use PM2.5 uncertainties to remove samples that fall outside -3*PM2.5_UNC.
+# In this way, we don't risk censoring the data but do remove likely erroneous data.
+US_DATA_all<-US_DATA_all %>% dplyr::filter(PM2.5 > -3*PM2.5_UNC)
+```
+
+```{r, "Screen proxies, constructs, PM, and useless things"}
+exclude<-c("PM10","POC","ammNO3","ammSO4","SOIL","SeaSalt","OC1","OC2","OC3","OC4","EC1","EC2","EC3","fAbs_MDL","fAbs")
+US_DATA_LRG<- US_DATA_all %>% dplyr::select(!contains(exclude) & !matches("_UNC") | matches("PM2.5_UNC"))
+any(is.na(US_DATA_LRG))
+US_DATA_LRG<-US_DATA_LRG[which(complete.cases(US_DATA_LRG)),]
+any(is.na(US_DATA_LRG))
+```
+
+```{r, "Part F: Partition data into training and testing sets"}
+
+set.seed(123)
+## --- Instead of random partitioning, I will partition by first sorting samples by SiteCode and DATE (already done) and place every other sample in the test set.
+# --- This data has seasonality. Sorting by date therefore ensures seasonality is equivalent between datasets
+n<-nrow(US_DATA_LRG)
+ind_test<-seq(1,n,2)
+US_DATA_LRG_test<-US_DATA_LRG[ind_test,]
+US_DATA_LRG<-US_DATA_LRG[-ind_test,]
+```
+
+### --- Step 2: mclust for GMMs ---
+
+```{r}
+## --- Normalize US data by PM2.5 conc --
+US_DATA_LRG_PM_norm<-US_DATA_LRG %>% dplyr::select(everything()/"PM2.5")
+#rename_with()
+
+```
+
+### --- Tree Regression --- ### 
+
+1) initial fits
+
+
+
+```{r}
+
+
+fit1 <- rpart(
+    formula = PM2.5 ~ .-PM2.5_UNC,
+    data    = US_DATA_LRG,
+    method  = "anova", 
+    control = list(minsplit = 10, maxdepth = 20, xval = 10)
+)
+fit1
+
+#pairs(US_DATA_LRG[which(sapply(US_DATA_LRG, is.numeric))])
+plotcp(fit1)
+
+abline(v = 12, lty = "dashed")
+```
+```{r}
+rpart.plot(fit1)
+summary(fit1)
+```
+```{r}
+pred <- predict(fit1, US_DATA_LRG_test)
+
+ModelMetrics::rmse(pred,US_DATA_LRG_test$PM2.5_UNC)
+
+ModelMetrics::gini(pred,US_DATA_LRG_test$PM2.5_UNC)
+#0.03234565
+fit1$cptable
+```
+
+```{r}
+ fit2 <- rpart(
+    formula = PM2.5 ~ .-PM2.5_UNC,
+    data    = US_DATA_LRG,
+    method  = "anova", 
+    control = list(minsplit = 10, maxdepth = 12, xval = 10)
+)  
+fit2   
+
+fit2$cptable
+```
+2) use a grid search method to find the optimal hyper-parameters for a single tree model
+```{r}
+
+hyper_grid <- expand.grid(
+  minsplit = seq(5, 20, 1),
+  maxdepth = seq(8, 15, 1)
+)
+
+head(hyper_grid)
+
+
+# total number of combinations
+nrow(hyper_grid)
+```
+
+
+```{r}
+models <- list() #best method i've found for doing this--but computationally expensive...
+
+for (i in 1:nrow(hyper_grid)) {
+  
+  # get minsplit, maxdepth values at row i
+  minsplit <- hyper_grid$minsplit[i]
+  maxdepth <- hyper_grid$maxdepth[i]
+
+  # train a model and store in the list
+  models[[i]] <- rpart(
+   formula = PM2.5 ~ .-PM2.5_UNC,
+    data    = US_DATA_LRG,
+    method  = "anova",
+    control = list(minsplit = minsplit, maxdepth = maxdepth)
+    )
+}
+```
+```{r}
+# function to get optimal cp
+get_cp <- function(x) {
+  min    <- which.min(x$cptable[, "xerror"])
+  cp <- x$cptable[min, "CP"] 
+}
+
+# function to get minimum error
+get_min_error <- function(x) {
+  min    <- which.min(x$cptable[, "xerror"])
+  xerror <- x$cptable[min, "xerror"] 
+}
+
+hyper_grid %>%
+  mutate(
+    cp    = purrr::map_dbl(models, get_cp),
+    error = purrr::map_dbl(models, get_min_error)
+    ) %>%
+  arrange(error) %>%
+  top_n(-5, wt = error)
+```
+
+```{r}
+optimal_tree <- rpart(
+    formula = PM2.5 ~ .-PM2.5_UNC,
+    data    = US_DATA_LRG,
+    method  = "anova",
+    control = list(minsplit = 10, maxdepth = 8, cp = 0.01, xval=10)
+    )
+
+pred <- predict(optimal_tree, newdata = US_DATA_LRG_test)
+
+
+rmse_op=RMSE(pred = pred, obs = US_DATA_LRG_test$PM2.5)
+ModelMetrics::gini(pred,US_DATA_LRG_test$PM2.5)
+mae_op=MAE(pred = pred, obs = US_DATA_LRG_test$PM2.5)
+
+rpart.plot(optimal_tree, main='Optimal Tree') #optimal tree determined througt grid search
+summary(optimal_tree)
+optimal_tree
+
+tmp <- printcp(optimal_tree) 
+rsq.val <- 1-tmp[,c(3,4)]  
+rsq.val #rquared and xerror for each split
+
+rsq_op = rsq.val[nrow(rsq.val),] #final rquared and xerror
+rsq.rpart(optimal_tree)#xerror and rsqu vs splits plot
+
+metrics_op = c(rmse_op,rsq_op[1],mae_op)
+metrics_op
+colnames(metrics_op) 
+```
+
+
+```{r}
+# Specify 10-fold cross validation
+ctrl <- trainControl(method = "cv",  number = 10) 
+
+# CV bagged model
+bagged_cv <- train(
+  PM2.5 ~ .-PM2.5_UNC,
+  data    = US_DATA_LRG,
+  method = "treebag",
+  trControl = ctrl,
+  importance = TRUE
+  )
+
+# assess results
+bagged_cv  #this is an object with many useful items
+
+
+# plot most important variables
+plot(varImp(bagged_cv),20, main="Predictor Importance", ylab="Predictor")  
+varImp(bagged_cv)
+metric_bag= bagged_cv$results[1,][2:4]
+bagged_cv
+
+metric_bag
+
+metrics_fin = rbind(metric_bag,metrics_op)
+
+rownames(metrics_fin)=c('Bagged_Tree_10cv','Optimal_GrdSrh_Tree_10cv' )
+metrics_fin
+
+```
+

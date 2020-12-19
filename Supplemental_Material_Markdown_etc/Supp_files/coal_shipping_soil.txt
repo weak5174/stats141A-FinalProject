@@ -1,0 +1,19 @@
+﻿@article{
+   author = {Song, Xin-Hua and Polissar, Alexandr V. and Hopke, Philip K.},
+   title = {Sources of fine particle composition in the northeastern US},
+   journal = {Atmospheric Environment},
+   volume = {35},
+   number = {31},
+   pages = {5277-5286},
+   abstract = {Fine particle composition data obtained at three sampling sites in the northeastern US were studied using a relatively new type of factor analysis, positive matrix factorization (PMF). The three sites are Washington, DC, Brigantine, NJ and Underhill, VT. The PMF method uses the estimates of the error in the data to provide optimal point-by-point weighting and permits efficient treatment of missing and below detection limit values. It also imposes the non-negativity constraint on the factors. Eight, nine and 11 sources were resolved from the Washington, Brigantine and Underhill data, respectively. The factors were normalized by using aerosol fine mass concentration data through multiple linear regression so that the quantitative source contributions for each resolved factor were obtained. Among the sources resolved at the three sites, six are common. These six sources exhibit not only similar chemical compositions, but also similar seasonal variations at all three sites. They are secondary sulfate with a high concentration of S and strong seasonal variation trend peaking in summer time; coal combustion with the presence of S and Se and its seasonal variation peaking in winter time; oil combustion characterized by Ni and V; soil represented by Al, Ca, Fe, K, Si and Ti; incinerator with the presence of Pb and Zn; sea salt with the high concentrations of Na and S. Among the other sources, nitrate (dominated by NO3−) and motor vehicle (with high concentrations of organic carbon (OC) and elemental carbon (EC), and with the presence of some soil dust components) were obtained for the Washington data, while the three additional sources for the Brigantine data were nitrate, motor vehicle and wood smoke (OC, EC, K). At the Underhill site, five other sources were resolved. They are wood smoke, Canadian Mn, Canadian Cu smelter, Canadian Ni smelter, and another salt source with high concentrations of Cl and Na. A nitrate source similar to that found at the other sites could not be obtained at Underhill since NO3− was not measured at this site. Generally, most of the sources at the three sites showed similar chemical composition profiles and seasonal variation patterns. The study indicated that PMF was a powerful factor analysis method to extract sources from the ambient aerosol concentration data.},
+   keywords = {Receptor modeling
+Positive matrix factorization (PMF)
+Source identification
+Northeastern US},
+   ISSN = {1352-2310},
+   DOI = {https://doi.org/10.1016/S1352-2310(01)00338-7},
+   url = {http://www.sciencedirect.com/science/article/pii/S1352231001003387},
+   year = {2001},
+   type = {Journal Article}
+}
+
