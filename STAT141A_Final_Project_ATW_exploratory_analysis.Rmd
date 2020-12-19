@@ -2,7 +2,8 @@
 title: "STA141A-ATW-Markdown"
 author: "Andrew T. Weakley"
 date: "12/15/2020"
-output: html_document
+output:
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -27,16 +28,6 @@ library(leaflet)
 #library(sp)
 library(sf)
 ```
-
-### --- Step 0: Packages to mess with --
-
-```{r, eval=FALSE}
-    if (!requireNamespace('BiocManager', quietly = TRUE))
-        install.packages('BiocManager')
-
-    BiocManager::install('PCAtools')
-```
-
 
 ### --- Step 1: Data loading and procressing ---
 
@@ -392,28 +383,25 @@ ggplot(US_DATA_test_stack_GMM %>% dplyr::filter(GMM_ID == c(10)), aes(x = reorde
   theme(plot.title=element_text(hjust = 0.5),axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+ylab("Concentration")+xlab("Species")+scale_y_log10()
   #+ geom_smooth(data=US_DATA_test_stack_err_GMM,method= "loess",span=0.1 ,se=FALSE, aes(group=1))
 ```
-
-### --- Step 3: Figures for the Porject report ---
-```{r, "Figure 1: PM2.5 species boxplot: predictors in regressions, corrplot",warning=FALSE}
-R<-cor(US_DATA_LRG %>% dplyr::select(!all_of(c("SiteCode","Date","PM2.5_UNC"))))
-DZA<-corrplot(R,order="hclust")
+### --- Step 3: Figures for the Project report ---
+```{r}
 
 ## --- Boxplot on normal and log scale ---
-F1A<-ggcorrplot(R,hc.order=TRUE)+theme(legend.position = "bottom")+theme(plot.title=element_text(hjust = 0.5,size=8),axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=6),axis.text.y = element_text(vjust = 0.5, hjust=1,size=6))+ggtitle("Sample Correlations: Predictors & response (=PM2.5)")
+F1A<-ggcorrplot(R,hc.order=TRUE)+
+  theme(legend.position = "bottom",plot.title=element_text(hjust = 0.5,size=9),axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=6,face="bold"),axis.text.y = element_text(vjust = 0.5, hjust=1,size=6,face = "bold"),)+
+ ggtitle("Sample Correlations: Predictors & response (=PM2.5)")
 
 ## --- Species boxplots ---
 US_DATA_w_stack<-stack(dplyr::select(US_DATA_LRG,!c("SiteCode","Date","PM2.5_UNC")))
 
 F1B<-ggplot(US_DATA_w_stack, aes(x = reorder(ind,values,FUN=median,na.rm=TRUE), y = values)) +
   geom_boxplot()+
-  theme(plot.title=element_text(hjust = 0.5,size=8),axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=6))+ylab("Mass Concentration")+xlab("Species")+scale_y_log10(labels=scales::comma)+ggtitle("Summary of predictors sans response")
+  theme(plot.title=element_text(hjust = 0.5,size=9),axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=6,face = "bold"))+ylab("Mass Concentration")+xlab("Species")+scale_y_log10(labels=scales::comma)+ggtitle("Summary of predictors and PM2.5")
 
-grid.arrange(D1A,D1B,nrow=1)
-
-
+grid.arrange(F1A,F1B,nrow=1)
 ```
 
-```{r, "PM Mass to SNR",warning=FALSE}
+```{r, "PM Mass to SNR", warning=FALSE}
 F2A<-ggplot(data=US_DATA_all,aes(x=as.Date(Date,"%m/%d/%Y"),y=PM2.5))+ geom_boxplot(aes(group=as.Date(Date,"%m/%d/%Y")),outlier.shape = NA, coef = 0)+
   theme(plot.title=element_text(hjust = 0.5,size=10))+geom_smooth(method= "loess",span=0.05 ,se=FALSE, aes(group=1))+ theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+xlab("Date")+ylab(TeX("PM2.5"))+ggtitle("Daily PM2.5 Mass Concentration")+scale_x_date(breaks = "1 month", labels=scales::date_format("%b-%Y"))+ylim(0,10)
 
